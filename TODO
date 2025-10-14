@@ -1,0 +1,12 @@
+Registry Based:
+    All status are posted to .Watches in Registry
+Probes:
+    Ping - ping host {host:, }
+    Http Status Code - GET url 
+    Row Count (Mongo, SQL) - count
+    Date range (Mongo, SQL)
+    SystemD service Status - systemctl status
+    Connection Success Failure - mongo,mysql
+    Redis KEY - redis get
+    Redis List count - redis len
+    last ID change (Mongo and SQL) - latest id

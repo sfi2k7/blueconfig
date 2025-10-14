@@ -1,0 +1,30 @@
+backed by tbolt?
+
+root -> main bucket
+
+/hello/world/description
+
+hello:
+    bucket with keys
+    world:
+        bucket inside hello with keys
+            description:
+                key inside world bucket
+
+hello:
+    ID : 1
+    isFolder = true
+    path : /hello
+
+world:
+    ID : 2
+    PARENT_ID = 1
+    IsFolder = true
+    path : /hello/world
+
+description:
+    ID : 3
+    ParentID : 2
+    isKey : true
+    Value : "Description" 
+    path : /hello/world

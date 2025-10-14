@@ -1,0 +1,4 @@
+main.go
+*.md
+cmd/cofigserver
+*.store
