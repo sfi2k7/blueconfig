@@ -3429,3 +3429,469 @@ func TestAnalyzeQuery(t *testing.T) {
 		t.Errorf("Expected index name 'idx_name', got '%s'", plan2.IndexName)
 	}
 }
+
+// ============================================================================
+// Transaction Tests
+// ============================================================================
+
+func TestTransactionCommit(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Start transaction
+	txn, err := tree.BeginTransaction()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer txn.Rollback()
+
+	// Insert rows in transaction
+	err = txn.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{
+		"name": "Alice",
+		"age":  30,
+	}))
+	if err != nil {
+		t.Fatalf("Failed to insert in transaction: %v", err)
+	}
+
+	err = txn.InsertRowWithID("root/mydb/users", "user2", models.NewRow(map[string]interface{}{
+		"name": "Bob",
+		"age":  25,
+	}))
+	if err != nil {
+		t.Fatalf("Failed to insert in transaction: %v", err)
+	}
+
+	// Commit transaction
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit transaction: %v", err)
+	}
+
+	// Verify rows exist
+	row1, err := tree.GetRow("root/mydb/users", "user1")
+	if err != nil {
+		t.Errorf("Row user1 should exist after commit: %v", err)
+	}
+	if row1["name"].AsString() != "Alice" {
+		t.Errorf("Expected name 'Alice', got '%v'", row1["name"].AsString())
+	}
+
+	row2, err := tree.GetRow("root/mydb/users", "user2")
+	if err != nil {
+		t.Errorf("Row user2 should exist after commit: %v", err)
+	}
+	if row2["name"].AsString() != "Bob" {
+		t.Errorf("Expected name 'Bob', got '%v'", row2["name"].AsString())
+	}
+}
+
+func TestTransactionRollback(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial row
+	tree.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{
+		"name": "Alice",
+		"age":  30,
+	}))
+
+	// Start transaction
+	txn, err := tree.BeginTransaction()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	// Insert row in transaction
+	err = txn.InsertRowWithID("root/mydb/users", "user2", models.NewRow(map[string]interface{}{
+		"name": "Bob",
+		"age":  25,
+	}))
+	if err != nil {
+		t.Fatalf("Failed to insert in transaction: %v", err)
+	}
+
+	// Update existing row in transaction
+	err = txn.UpdateRowFields("root/mydb/users", "user1", map[string]interface{}{
+		"age": 31,
+	})
+	if err != nil {
+		t.Fatalf("Failed to update in transaction: %v", err)
+	}
+
+	// Rollback transaction
+	err = txn.Rollback()
+	if err != nil {
+		t.Fatalf("Failed to rollback transaction: %v", err)
+	}
+
+	// Verify user2 does NOT exist (was rolled back)
+	_, err = tree.GetRow("root/mydb/users", "user2")
+	if err == nil {
+		t.Error("Row user2 should NOT exist after rollback")
+	}
+
+	// Verify user1 still has original age (update was rolled back)
+	row1, err := tree.GetRow("root/mydb/users", "user1")
+	if err != nil {
+		t.Fatalf("Row user1 should still exist: %v", err)
+	}
+	if row1["age"].AsString() != "30" {
+		t.Errorf("Expected age 30 (rollback), got %v", row1["age"].AsString())
+	}
+}
+
+func TestTransactionUpdate(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial rows
+	tree.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{
+		"name":  "Alice",
+		"age":   30,
+		"email": "alice@example.com",
+	}))
+
+	// Start transaction
+	txn, err := tree.BeginTransaction()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer txn.Rollback()
+
+	// Update multiple fields
+	err = txn.UpdateRowFields("root/mydb/users", "user1", map[string]interface{}{
+		"age":  35,
+		"city": "NYC",
+	})
+	if err != nil {
+		t.Fatalf("Failed to update in transaction: %v", err)
+	}
+
+	// Commit
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit: %v", err)
+	}
+
+	// Verify updates
+	row, err := tree.GetRow("root/mydb/users", "user1")
+	if err != nil {
+		t.Fatalf("Failed to get row: %v", err)
+	}
+
+	if row["age"].AsString() != "35" {
+		t.Errorf("Expected age 35, got %v", row["age"].AsString())
+	}
+
+	if row["city"].AsString() != "NYC" {
+		t.Errorf("Expected city 'NYC', got %v", row["city"].AsString())
+	}
+}
+
+func TestTransactionDelete(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert rows
+	tree.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{
+		"name": "Alice",
+	}))
+	tree.InsertRowWithID("root/mydb/users", "user2", models.NewRow(map[string]interface{}{
+		"name": "Bob",
+	}))
+	tree.InsertRowWithID("root/mydb/users", "user3", models.NewRow(map[string]interface{}{
+		"name": "Charlie",
+	}))
+
+	// Start transaction
+	txn, err := tree.BeginTransaction()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+	defer txn.Rollback()
+
+	// Delete user2
+	err = txn.DeleteRow("root/mydb/users", "user2")
+	if err != nil {
+		t.Fatalf("Failed to delete in transaction: %v", err)
+	}
+
+	// Commit
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("Failed to commit: %v", err)
+	}
+
+	// Verify user2 is deleted
+	_, err = tree.GetRow("root/mydb/users", "user2")
+	if err == nil {
+		t.Error("user2 should be deleted")
+	}
+
+	// Verify other rows still exist
+	_, err = tree.GetRow("root/mydb/users", "user1")
+	if err != nil {
+		t.Error("user1 should still exist")
+	}
+
+	_, err = tree.GetRow("root/mydb/users", "user3")
+	if err != nil {
+		t.Error("user3 should still exist")
+	}
+}
+
+func TestTransactionMultipleCommits(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	txn, err := tree.BeginTransaction()
+	if err != nil {
+		t.Fatalf("Failed to begin transaction: %v", err)
+	}
+
+	txn.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{
+		"name": "Alice",
+	}))
+
+	err = txn.Commit()
+	if err != nil {
+		t.Fatalf("First commit failed: %v", err)
+	}
+
+	// Second commit should fail
+	err = txn.Commit()
+	if err == nil {
+		t.Error("Second commit should fail")
+	}
+}
+
+func TestTransactionIsActive(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	txn, _ := tree.BeginTransaction()
+
+	if !txn.IsActive() {
+		t.Error("Transaction should be active after begin")
+	}
+
+	txn.Commit()
+
+	if txn.IsActive() {
+		t.Error("Transaction should not be active after commit")
+	}
+
+	txn2, _ := tree.BeginTransaction()
+
+	if !txn2.IsActive() {
+		t.Error("Transaction should be active after begin")
+	}
+
+	txn2.Rollback()
+
+	if txn2.IsActive() {
+		t.Error("Transaction should not be active after rollback")
+	}
+}
+
+// ============================================================================
+// Upsert Tests
+// ============================================================================
+
+func TestUpsertInsert(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Upsert on non-existent row should insert
+	wasInserted, err := tree.Upsert("root/mydb/users", "user1", models.NewRow(map[string]interface{}{
+		"name": "Alice",
+		"age":  30,
+	}))
+
+	if err != nil {
+		t.Fatalf("Upsert failed: %v", err)
+	}
+
+	if !wasInserted {
+		t.Error("Expected insert, got update")
+	}
+
+	// Verify row exists
+	row, err := tree.GetRow("root/mydb/users", "user1")
+	if err != nil {
+		t.Fatalf("Row should exist: %v", err)
+	}
+
+	if row["name"].AsString() != "Alice" {
+		t.Errorf("Expected name 'Alice', got %v", row["name"].AsString())
+	}
+}
+
+func TestUpsertUpdate(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial row
+	tree.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{
+		"name": "Alice",
+		"age":  30,
+	}))
+
+	// Upsert on existing row should update
+	wasInserted, err := tree.Upsert("root/mydb/users", "user1", models.NewRow(map[string]interface{}{
+		"name": "Alice Updated",
+		"age":  31,
+	}))
+
+	if err != nil {
+		t.Fatalf("Upsert failed: %v", err)
+	}
+
+	if wasInserted {
+		t.Error("Expected update, got insert")
+	}
+
+	// Verify row was updated
+	row, err := tree.GetRow("root/mydb/users", "user1")
+	if err != nil {
+		t.Fatalf("Row should exist: %v", err)
+	}
+
+	if row["name"].AsString() != "Alice Updated" {
+		t.Errorf("Expected name 'Alice Updated', got %v", row["name"].AsString())
+	}
+
+	if row["age"].AsString() != "31" {
+		t.Errorf("Expected age 31, got %v", row["age"].AsString())
+	}
+}
+
+func TestUpsertMany(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert one existing row
+	tree.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{
+		"name": "Alice",
+		"age":  30,
+	}))
+
+	// Upsert multiple rows (1 update, 2 inserts)
+	rows := map[string]models.Row{
+		"user1": models.NewRow(map[string]interface{}{
+			"name": "Alice Updated",
+			"age":  31,
+		}),
+		"user2": models.NewRow(map[string]interface{}{
+			"name": "Bob",
+			"age":  25,
+		}),
+		"user3": models.NewRow(map[string]interface{}{
+			"name": "Charlie",
+			"age":  35,
+		}),
+	}
+
+	insertCount, updateCount, err := tree.UpsertMany("root/mydb/users", rows)
+	if err != nil {
+		t.Fatalf("UpsertMany failed: %v", err)
+	}
+
+	if insertCount != 2 {
+		t.Errorf("Expected 2 inserts, got %d", insertCount)
+	}
+
+	if updateCount != 1 {
+		t.Errorf("Expected 1 update, got %d", updateCount)
+	}
+
+	// Verify all rows
+	row1, _ := tree.GetRow("root/mydb/users", "user1")
+	if row1["name"].AsString() != "Alice Updated" {
+		t.Error("user1 should be updated")
+	}
+
+	row2, _ := tree.GetRow("root/mydb/users", "user2")
+	if row2["name"].AsString() != "Bob" {
+		t.Error("user2 should be inserted")
+	}
+
+	row3, _ := tree.GetRow("root/mydb/users", "user3")
+	if row3["name"].AsString() != "Charlie" {
+		t.Error("user3 should be inserted")
+	}
+}
+
+func TestUpsertFields(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Upsert fields on non-existent row (insert)
+	wasInserted, err := tree.UpsertFields("root/mydb/users", "user1", map[string]interface{}{
+		"name": "Alice",
+		"age":  30,
+	})
+
+	if err != nil {
+		t.Fatalf("UpsertFields failed: %v", err)
+	}
+
+	if !wasInserted {
+		t.Error("Expected insert")
+	}
+
+	// Upsert fields on existing row (update)
+	wasInserted, err = tree.UpsertFields("root/mydb/users", "user1", map[string]interface{}{
+		"age":  31,
+		"city": "NYC",
+	})
+
+	if err != nil {
+		t.Fatalf("UpsertFields failed: %v", err)
+	}
+
+	if wasInserted {
+		t.Error("Expected update")
+	}
+
+	// Verify fields
+	row, _ := tree.GetRow("root/mydb/users", "user1")
+	if row["age"].AsString() != "31" {
+		t.Errorf("Expected age 31, got %v", row["age"].AsString())
+	}
+
+	if row["city"].AsString() != "NYC" {
+		t.Errorf("Expected city 'NYC', got %v", row["city"].AsString())
+	}
+}

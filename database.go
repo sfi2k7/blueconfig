@@ -10,6 +10,7 @@ import (
 
 	"github.com/sfi2k7/blueconfig/models"
 	"github.com/sfi2k7/blueconfig/parser"
+	"go.etcd.io/bbolt"
 )
 
 // ============================================================================
@@ -2450,4 +2451,395 @@ func (t *Tree) ExistsWhere(tablePath string, queryStr string) (bool, error) {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// ============================================================================
+// Transaction Support
+// ============================================================================
+
+// Transaction wraps a BoltDB transaction for ACID operations.
+// Provides explicit control over commit and rollback.
+type Transaction struct {
+	tree      *Tree
+	tx        *bbolt.Tx
+	committed bool
+	rolledBack bool
+}
+
+// BeginTransaction starts a new read-write transaction.
+// All operations within the transaction are isolated until committed.
+// Only one read-write transaction can be active at a time (BoltDB limitation).
+//
+// Usage:
+//   txn, err := tree.BeginTransaction()
+//   if err != nil { return err }
+//   defer txn.Rollback() // Rollback if not committed
+//
+//   // Perform operations...
+//   txn.InsertRow(tablePath, row)
+//   txn.UpdateRow(tablePath, rowID, updates)
+//
+//   return txn.Commit() // Commit all changes
+func (t *Tree) BeginTransaction() (*Transaction, error) {
+	tx, err := t.db.Begin(true) // true = writable
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+
+	return &Transaction{
+		tree: t,
+		tx:   tx,
+	}, nil
+}
+
+// BeginReadTransaction starts a new read-only transaction.
+// Multiple read-only transactions can run concurrently.
+// Provides a consistent snapshot of the database.
+func (t *Tree) BeginReadTransaction() (*Transaction, error) {
+	tx, err := t.db.Begin(false) // false = read-only
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin read transaction: %v", err)
+	}
+
+	return &Transaction{
+		tree: t,
+		tx:   tx,
+	}, nil
+}
+
+// Commit commits the transaction, making all changes permanent.
+// After commit, the transaction cannot be used again.
+func (txn *Transaction) Commit() error {
+	if txn.committed {
+		return errors.New("transaction already committed")
+	}
+	if txn.rolledBack {
+		return errors.New("transaction already rolled back")
+	}
+
+	err := txn.tx.Commit()
+	if err != nil {
+		return fmt.Errorf("failed to commit transaction: %v", err)
+	}
+
+	txn.committed = true
+	return nil
+}
+
+// Rollback rolls back the transaction, discarding all changes.
+// After rollback, the transaction cannot be used again.
+// Safe to call multiple times (idempotent).
+func (txn *Transaction) Rollback() error {
+	if txn.committed {
+		return errors.New("cannot rollback committed transaction")
+	}
+	if txn.rolledBack {
+		return nil // Already rolled back, no-op
+	}
+
+	err := txn.tx.Rollback()
+	if err != nil {
+		return fmt.Errorf("failed to rollback transaction: %v", err)
+	}
+
+	txn.rolledBack = true
+	return nil
+}
+
+// IsActive returns true if the transaction is still active (not committed or rolled back)
+func (txn *Transaction) IsActive() bool {
+	return !txn.committed && !txn.rolledBack
+}
+
+// ============================================================================
+// Transaction CRUD Operations
+// ============================================================================
+
+// InsertRow inserts a new row into a table within the transaction.
+// Returns the generated row ID.
+func (txn *Transaction) InsertRow(tablePath string, row models.Row) (string, error) {
+	if !txn.IsActive() {
+		return "", errors.New("transaction is not active")
+	}
+
+	rowID := txn.tree.GenerateRowID()
+	err := txn.InsertRowWithID(tablePath, rowID, row)
+	if err != nil {
+		return "", err
+	}
+	return rowID, nil
+}
+
+// InsertRowWithID inserts a row with a specific ID within the transaction.
+func (txn *Transaction) InsertRowWithID(tablePath, rowID string, row models.Row) error {
+	if !txn.IsActive() {
+		return errors.New("transaction is not active")
+	}
+
+	if err := txn.tree.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	// Build full path and normalize it
+	rowPath := tablePath + "/" + rowID
+
+	// Normalize path similar to fixpath() in db.go
+	rowPath = strings.ReplaceAll(rowPath, "//", "/")
+	rowPath = strings.TrimPrefix(rowPath, "/")
+	rowPath = strings.TrimSuffix(rowPath, "/")
+
+	if !strings.HasPrefix(rowPath, "root/") && rowPath != "root" {
+		rowPath = "root/" + rowPath
+	}
+
+	// Split into segments
+	segments := strings.Split(rowPath, "/")
+
+	var b *bbolt.Bucket
+	var err error
+
+	// Navigate/create bucket hierarchy
+	for _, segment := range segments {
+		segment = strings.ReplaceAll(segment, " ", "_") // sanitize
+		if b == nil {
+			b, err = txn.tx.CreateBucketIfNotExists([]byte(segment))
+		} else {
+			b, err = b.CreateBucketIfNotExists([]byte(segment))
+		}
+		if err != nil {
+			return err
+		}
+	}
+
+	// Save row fields using same format as CreateNodeWithProps
+	for fieldName, value := range row {
+		if value == nil {
+			continue
+		}
+
+		// Use fmt.Sprintf like CreateNodeWithProps does, not JSON
+		var data string
+		if value.IsNull() {
+			data = "null"
+		} else {
+			data = fmt.Sprintf("%v", value.Val())
+		}
+
+		if err := b.Put([]byte(fieldName), []byte(data)); err != nil {
+			return fmt.Errorf("failed to save field %s: %v", fieldName, err)
+		}
+	}
+
+	return nil
+}
+
+// UpdateRow updates an entire row within the transaction.
+func (txn *Transaction) UpdateRow(tablePath, rowID string, row models.Row) error {
+	if !txn.IsActive() {
+		return errors.New("transaction is not active")
+	}
+
+	return txn.UpdateRowFields(tablePath, rowID, rowToMap(row))
+}
+
+// UpdateRowFields updates specific fields of a row within the transaction.
+func (txn *Transaction) UpdateRowFields(tablePath, rowID string, fields map[string]interface{}) error {
+	if !txn.IsActive() {
+		return errors.New("transaction is not active")
+	}
+
+	if err := txn.tree.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	rowPath := tablePath + "/" + rowID
+
+	// Normalize path
+	rowPath = strings.ReplaceAll(rowPath, "//", "/")
+	rowPath = strings.TrimPrefix(rowPath, "/")
+	rowPath = strings.TrimSuffix(rowPath, "/")
+	if !strings.HasPrefix(rowPath, "root/") && rowPath != "root" {
+		rowPath = "root/" + rowPath
+	}
+
+	segments := strings.Split(rowPath, "/")
+	b, err := txn.getBucket(segments)
+	if err != nil {
+		return fmt.Errorf("row not found: %v", err)
+	}
+
+	// Update fields using same format as CreateNodeWithProps
+	for fieldName, value := range fields {
+		// Use fmt.Sprintf like CreateNodeWithProps does, not JSON
+		var data string
+		if value == nil {
+			data = "null"
+		} else {
+			data = fmt.Sprintf("%v", value)
+		}
+
+		if err := b.Put([]byte(fieldName), []byte(data)); err != nil {
+			return fmt.Errorf("failed to update field %s: %v", fieldName, err)
+		}
+	}
+
+	return nil
+}
+
+// DeleteRow deletes a row within the transaction.
+func (txn *Transaction) DeleteRow(tablePath, rowID string) error {
+	if !txn.IsActive() {
+		return errors.New("transaction is not active")
+	}
+
+	if err := txn.tree.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	path := tablePath + "/" + rowID
+
+	// Normalize path
+	path = strings.ReplaceAll(path, "//", "/")
+	path = strings.TrimPrefix(path, "/")
+	path = strings.TrimSuffix(path, "/")
+	if !strings.HasPrefix(path, "root/") && path != "root" {
+		path = "root/" + path
+	}
+
+	segments := strings.Split(path, "/")
+
+	if len(segments) < 2 {
+		return errors.New("invalid row path")
+	}
+
+	nodeToDelete := segments[len(segments)-1]
+	parentSegments := segments[:len(segments)-1]
+
+	parentBucket, err := txn.getBucket(parentSegments)
+	if err != nil {
+		return fmt.Errorf("parent bucket not found: %v", err)
+	}
+
+	if err := parentBucket.DeleteBucket([]byte(nodeToDelete)); err != nil {
+		return fmt.Errorf("failed to delete row: %v", err)
+	}
+
+	return nil
+}
+
+// getBucket navigates to a bucket using the transaction's tx
+func (txn *Transaction) getBucket(segments []string) (*bbolt.Bucket, error) {
+	var b *bbolt.Bucket
+
+	for _, segment := range segments {
+		segment = strings.ReplaceAll(segment, " ", "_") // sanitize
+		if b == nil {
+			b = txn.tx.Bucket([]byte(segment))
+		} else {
+			b = b.Bucket([]byte(segment))
+		}
+
+		if b == nil {
+			return nil, fmt.Errorf("bucket not found: %s", segment)
+		}
+	}
+
+	return b, nil
+}
+
+// rowToMap converts a models.Row to a map[string]interface{}
+func rowToMap(row models.Row) map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, v := range row {
+		if v != nil {
+			result[k] = v.Val()
+		}
+	}
+	return result
+}
+
+// ============================================================================
+// Upsert Operations (Insert or Update)
+// ============================================================================
+
+// Upsert inserts a new row or updates an existing row if it already exists.
+// Returns (rowID, wasInserted, error) where wasInserted is true for insert, false for update.
+func (t *Tree) Upsert(tablePath, rowID string, row models.Row) (bool, error) {
+	// Check if row exists
+	exists, err := t.RowExists(tablePath, rowID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check row existence: %v", err)
+	}
+
+	if exists {
+		// Update existing row
+		err = t.UpdateRow(tablePath, rowID, row)
+		if err != nil {
+			return false, fmt.Errorf("failed to update row: %v", err)
+		}
+		return false, nil // Was updated
+	} else {
+		// Insert new row
+		err = t.InsertRowWithID(tablePath, rowID, row)
+		if err != nil {
+			return false, fmt.Errorf("failed to insert row: %v", err)
+		}
+		return true, nil // Was inserted
+	}
+}
+
+// UpsertMany performs upsert operations on multiple rows.
+// Returns (insertCount, updateCount, error)
+func (t *Tree) UpsertMany(tablePath string, rows map[string]models.Row) (int, int, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return 0, 0, err
+	}
+
+	insertCount := 0
+	updateCount := 0
+
+	for rowID, row := range rows {
+		wasInserted, err := t.Upsert(tablePath, rowID, row)
+		if err != nil {
+			return insertCount, updateCount, fmt.Errorf("upsert failed for row %s: %v", rowID, err)
+		}
+
+		if wasInserted {
+			insertCount++
+		} else {
+			updateCount++
+		}
+	}
+
+	return insertCount, updateCount, nil
+}
+
+// UpsertFields inserts a new row or updates specific fields if row exists.
+// Returns (wasInserted, error)
+func (t *Tree) UpsertFields(tablePath, rowID string, fields map[string]interface{}) (bool, error) {
+	// Check if row exists
+	exists, err := t.RowExists(tablePath, rowID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check row existence: %v", err)
+	}
+
+	if exists {
+		// Update existing row fields
+		err = t.UpdateRowFields(tablePath, rowID, fields)
+		if err != nil {
+			return false, fmt.Errorf("failed to update fields: %v", err)
+		}
+		return false, nil // Was updated
+	} else {
+		// Insert new row with these fields
+		row := make(models.Row)
+		for k, v := range fields {
+			row[k] = models.NewValue(v)
+		}
+		err = t.InsertRowWithID(tablePath, rowID, row)
+		if err != nil {
+			return false, fmt.Errorf("failed to insert row: %v", err)
+		}
+		return true, nil // Was inserted
+	}
 }
