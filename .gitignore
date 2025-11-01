@@ -2,3 +2,4 @@ main.go
 *.md
 cmd/cofigserver/**
 *.store
+test_db_*

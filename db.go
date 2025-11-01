@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sfi2k7/blueconfig/models"
 	"github.com/sfi2k7/microweb"
 	"go.etcd.io/bbolt"
 )
@@ -529,6 +530,10 @@ func (t *Tree) Serve() {
 	tsGroup := web.Group("/timeseries")
 	t.registerTimeseriesRoutes(tsGroup)
 
+	// Database/Table/Row CRUD endpoints
+	dbGroup := web.Group("/db")
+	t.registerDatabaseRoutes(dbGroup)
+
 	web.Listen(t.port)
 }
 
@@ -824,4 +829,342 @@ func (t *Tree) handleDeleteSensor(c *microweb.Context) {
 		return
 	}
 	c.Json(response{Result: true})
+}
+
+// ============================================================================
+// Database/Table/Row CRUD HTTP Handlers
+// ============================================================================
+
+// registerDatabaseRoutes registers all database CRUD endpoints
+func (t *Tree) registerDatabaseRoutes(g *microweb.Group) {
+	// Database operations
+	g.Post("/:dbPath/create", t.handleCreateDatabase)
+	g.Get("/:dbPath/info", t.handleGetDatabaseInfo)
+	g.Delete("/:dbPath", t.handleDeleteDatabase)
+	g.Get("/list", t.handleListDatabases)
+
+	// Table operations
+	g.Post("/:dbPath/tables/:tableName/create", t.handleCreateTable)
+	g.Get("/:dbPath/tables", t.handleListTables)
+	g.Get("/:dbPath/tables/:tableName/info", t.handleGetTableInfo)
+	g.Delete("/:dbPath/tables/:tableName", t.handleDeleteTable)
+
+	// Row operations
+	g.Post("/:dbPath/tables/:tableName/rows", t.handleInsertRow)
+	g.Get("/:dbPath/tables/:tableName/rows", t.handleListRows)
+	g.Get("/:dbPath/tables/:tableName/rows/:rowID", t.handleGetRow)
+	g.Put("/:dbPath/tables/:tableName/rows/:rowID", t.handleUpdateRow)
+	g.Patch("/:dbPath/tables/:tableName/rows/:rowID", t.handleUpdateRowFields)
+	g.Delete("/:dbPath/tables/:tableName/rows/:rowID", t.handleDeleteRow)
+	g.Get("/:dbPath/tables/:tableName/rows/count", t.handleCountRows)
+}
+
+// Database handlers
+
+func (t *Tree) handleCreateDatabase(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+
+	body, err := c.Body()
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	var metadata map[string]interface{}
+	if len(body) > 0 {
+		err = json.Unmarshal(body, &metadata)
+		if err != nil {
+			c.Json(response{Error: err.Error()})
+			return
+		}
+	}
+
+	err = t.CreateDatabase(dbPath, metadata)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: true})
+}
+
+func (t *Tree) handleGetDatabaseInfo(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+
+	info, err := t.GetDatabaseInfo(dbPath)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: info})
+}
+
+func (t *Tree) handleDeleteDatabase(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	force := c.Query("force") == "true"
+
+	err := t.DeleteDatabase(dbPath, force)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: true})
+}
+
+func (t *Tree) handleListDatabases(c *microweb.Context) {
+	rootPath := c.Query("path")
+	if rootPath == "" {
+		rootPath = "root"
+	}
+
+	databases, err := t.ListDatabases(rootPath)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: databases})
+}
+
+// Table handlers
+
+func (t *Tree) handleCreateTable(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+
+	err := t.CreateTable(dbPath, tableName)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: true})
+}
+
+func (t *Tree) handleListTables(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+
+	tables, err := t.ListTables(dbPath)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: tables})
+}
+
+func (t *Tree) handleGetTableInfo(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+	tablePath := dbPath + "/" + tableName
+
+	info, err := t.GetTableInfo(tablePath)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: info})
+}
+
+func (t *Tree) handleDeleteTable(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+	force := c.Query("force") == "true"
+
+	err := t.DeleteTable(dbPath, tableName, force)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: true})
+}
+
+// Row handlers
+
+func (t *Tree) handleInsertRow(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+	tablePath := dbPath + "/" + tableName
+
+	body, err := c.Body()
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	var data map[string]interface{}
+	err = json.Unmarshal(body, &data)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	// Convert to Row
+	row := models.NewRow(data)
+
+	// Check if specific ID requested
+	rowID := c.Query("id")
+	if rowID != "" {
+		err = t.InsertRowWithID(tablePath, rowID, row)
+		if err != nil {
+			c.Json(response{Error: err.Error()})
+			return
+		}
+		c.Json(response{Result: map[string]string{"id": rowID}})
+	} else {
+		generatedID, err := t.InsertRow(tablePath, row)
+		if err != nil {
+			c.Json(response{Error: err.Error()})
+			return
+		}
+		c.Json(response{Result: map[string]string{"id": generatedID}})
+	}
+}
+
+func (t *Tree) handleListRows(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+	tablePath := dbPath + "/" + tableName
+
+	// Check if full data requested
+	if c.Query("full") == "true" {
+		allRows, err := t.GetAllRows(tablePath)
+		if err != nil {
+			c.Json(response{Error: err.Error()})
+			return
+		}
+
+		// Convert to JSON-serializable format
+		result := make(map[string]map[string]interface{})
+		for rowID, row := range allRows {
+			rowData := make(map[string]interface{})
+			for key, val := range row {
+				rowData[key] = val.Val()
+			}
+			result[rowID] = rowData
+		}
+
+		c.Json(response{Result: result})
+	} else {
+		// Just return row IDs
+		rowIDs, err := t.ListRows(tablePath)
+		if err != nil {
+			c.Json(response{Error: err.Error()})
+			return
+		}
+		c.Json(response{Result: rowIDs})
+	}
+}
+
+func (t *Tree) handleGetRow(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+	rowID := c.Param("rowID")
+	tablePath := dbPath + "/" + tableName
+
+	row, err := t.GetRow(tablePath, rowID)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	// Convert to JSON-serializable format
+	rowData := make(map[string]interface{})
+	for key, val := range row {
+		rowData[key] = val.Val()
+	}
+
+	c.Json(response{Result: rowData})
+}
+
+func (t *Tree) handleUpdateRow(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+	rowID := c.Param("rowID")
+	tablePath := dbPath + "/" + tableName
+
+	body, err := c.Body()
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	var data map[string]interface{}
+	err = json.Unmarshal(body, &data)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	// Convert to Row
+	row := models.NewRow(data)
+
+	err = t.UpdateRow(tablePath, rowID, row)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: true})
+}
+
+func (t *Tree) handleUpdateRowFields(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+	rowID := c.Param("rowID")
+	tablePath := dbPath + "/" + tableName
+
+	body, err := c.Body()
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	var fields map[string]interface{}
+	err = json.Unmarshal(body, &fields)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	err = t.UpdateRowFields(tablePath, rowID, fields)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: true})
+}
+
+func (t *Tree) handleDeleteRow(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+	rowID := c.Param("rowID")
+	tablePath := dbPath + "/" + tableName
+
+	err := t.DeleteRow(tablePath, rowID)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: true})
+}
+
+func (t *Tree) handleCountRows(c *microweb.Context) {
+	dbPath := "root/" + c.Param("dbPath")
+	tableName := c.Param("tableName")
+	tablePath := dbPath + "/" + tableName
+
+	count, err := t.CountRows(tablePath)
+	if err != nil {
+		c.Json(response{Error: err.Error()})
+		return
+	}
+
+	c.Json(response{Result: map[string]int{"count": count}})
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sfi2k7/blueconfig/models"
+	"github.com/sfi2k7/blueconfig/parser"
 )
 
 // ============================================================================
@@ -1469,5 +1470,1962 @@ func TestConcurrentSchemaUpdates(t *testing.T) {
 	// Should have id + 5 field fields
 	if len(schema.Fields) < 6 {
 		t.Errorf("Expected at least 6 fields, got %d", len(schema.Fields))
+	}
+}
+
+// ============================================================================
+// Row/Record CRUD Tests
+// ============================================================================
+
+func TestInsertRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup database and table
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Create a row
+	row := models.NewRow(map[string]interface{}{
+		"name":  "John Doe",
+		"age":   30,
+		"email": "john@example.com",
+	})
+
+	// Insert the row
+	rowID, err := tree.InsertRow("root/mydb/users", row)
+	if err != nil {
+		t.Fatalf("Failed to insert row: %v", err)
+	}
+
+	if rowID == "" {
+		t.Error("Expected non-empty row ID")
+	}
+
+	// Verify row count
+	count, _ := tree.GetRowCount("root/mydb/users")
+	if count != 1 {
+		t.Errorf("Expected row count 1, got %d", count)
+	}
+
+	// Verify schema was created
+	schema, _ := tree.GetTableSchema("root/mydb/users")
+	if schema == nil {
+		t.Error("Expected schema to be created")
+	}
+
+	if len(schema.Fields) != 3 {
+		t.Errorf("Expected 3 fields in schema, got %d", len(schema.Fields))
+	}
+}
+
+func TestInsertRowWithID(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	row := models.NewRow(map[string]interface{}{
+		"name": "Jane Doe",
+		"age":  25,
+	})
+
+	// Insert with custom ID
+	err := tree.InsertRowWithID("root/mydb/users", "user_123", row)
+	if err != nil {
+		t.Fatalf("Failed to insert row with ID: %v", err)
+	}
+
+	// Verify row exists
+	exists, _ := tree.RowExists("root/mydb/users", "user_123")
+	if !exists {
+		t.Error("Expected row to exist")
+	}
+
+	// Try to insert duplicate ID
+	err = tree.InsertRowWithID("root/mydb/users", "user_123", row)
+	if err == nil {
+		t.Error("Expected error when inserting duplicate row ID")
+	}
+}
+
+func TestGetRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert a row
+	originalRow := models.NewRow(map[string]interface{}{
+		"name":  "Alice",
+		"age":   28,
+		"email": "alice@example.com",
+	})
+
+	rowID, _ := tree.InsertRow("root/mydb/users", originalRow)
+
+	// Get the row
+	retrievedRow, err := tree.GetRow("root/mydb/users", rowID)
+	if err != nil {
+		t.Fatalf("Failed to get row: %v", err)
+	}
+
+	// Verify fields
+	if nameVal, ok := retrievedRow["name"]; ok {
+		nameStr := nameVal.AsString()
+		if nameStr != "Alice" {
+			t.Errorf("Expected name 'Alice', got %v", nameStr)
+		}
+	} else {
+		t.Error("Expected 'name' field to exist")
+	}
+
+	if ageVal, ok := retrievedRow["age"]; ok {
+		ageStr := ageVal.AsString()
+		if ageStr != "28" {
+			t.Errorf("Expected age '28', got %v", ageStr)
+		}
+	} else {
+		t.Error("Expected 'age' field to exist")
+	}
+}
+
+func TestGetRowNotFound(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Try to get non-existent row
+	_, err := tree.GetRow("root/mydb/users", "nonexistent")
+	if err == nil {
+		t.Error("Expected error when getting non-existent row")
+	}
+}
+
+func TestUpdateRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial row
+	originalRow := models.NewRow(map[string]interface{}{
+		"name": "Bob",
+		"age":  30,
+	})
+
+	rowID, _ := tree.InsertRow("root/mydb/users", originalRow)
+
+	// Update the row
+	updatedRow := models.NewRow(map[string]interface{}{
+		"name":  "Bob Smith",
+		"age":   31,
+		"email": "bob@example.com",
+	})
+
+	err := tree.UpdateRow("root/mydb/users", rowID, updatedRow)
+	if err != nil {
+		t.Fatalf("Failed to update row: %v", err)
+	}
+
+	// Verify update
+	retrievedRow, _ := tree.GetRow("root/mydb/users", rowID)
+
+	if nameVal, ok := retrievedRow["name"]; ok {
+		if nameVal.AsString() != "Bob Smith" {
+			t.Errorf("Expected updated name, got %v", nameVal.AsString())
+		}
+	}
+
+	if emailVal, ok := retrievedRow["email"]; ok {
+		if emailVal.AsString() != "bob@example.com" {
+			t.Errorf("Expected email field, got %v", emailVal.AsString())
+		}
+	}
+}
+
+func TestUpdateRowFields(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial row
+	originalRow := models.NewRow(map[string]interface{}{
+		"name": "Charlie",
+		"age":  25,
+		"city": "NYC",
+	})
+
+	rowID, _ := tree.InsertRow("root/mydb/users", originalRow)
+
+	// Partial update - only age
+	err := tree.UpdateRowFields("root/mydb/users", rowID, map[string]interface{}{
+		"age": 26,
+	})
+	if err != nil {
+		t.Fatalf("Failed to update row fields: %v", err)
+	}
+
+	// Verify partial update
+	retrievedRow, _ := tree.GetRow("root/mydb/users", rowID)
+
+	if ageVal, ok := retrievedRow["age"]; ok {
+		if ageVal.AsString() != "26" {
+			t.Errorf("Expected age 26, got %v", ageVal.AsString())
+		}
+	}
+
+	// Name and city should remain unchanged
+	if nameVal, ok := retrievedRow["name"]; ok {
+		if nameVal.AsString() != "Charlie" {
+			t.Errorf("Expected name unchanged, got %v", nameVal.AsString())
+		}
+	}
+}
+
+func TestDeleteRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert row
+	row := models.NewRow(map[string]interface{}{
+		"name": "Dave",
+	})
+
+	rowID, _ := tree.InsertRow("root/mydb/users", row)
+
+	// Verify row count before delete
+	countBefore, _ := tree.GetRowCount("root/mydb/users")
+	if countBefore != 1 {
+		t.Errorf("Expected count 1 before delete, got %d", countBefore)
+	}
+
+	// Delete row
+	err := tree.DeleteRow("root/mydb/users", rowID)
+	if err != nil {
+		t.Fatalf("Failed to delete row: %v", err)
+	}
+
+	// Verify row count after delete
+	countAfter, _ := tree.GetRowCount("root/mydb/users")
+	if countAfter != 0 {
+		t.Errorf("Expected count 0 after delete, got %d", countAfter)
+	}
+
+	// Verify row doesn't exist
+	exists, _ := tree.RowExists("root/mydb/users", rowID)
+	if exists {
+		t.Error("Expected row to not exist after deletion")
+	}
+}
+
+func TestListRows(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert multiple rows
+	for i := 0; i < 5; i++ {
+		row := models.NewRow(map[string]interface{}{
+			"id":   i,
+			"name": fmt.Sprintf("User %d", i),
+		})
+		tree.InsertRow("root/mydb/users", row)
+	}
+
+	// List all rows
+	rowIDs, err := tree.ListRows("root/mydb/users")
+	if err != nil {
+		t.Fatalf("Failed to list rows: %v", err)
+	}
+
+	if len(rowIDs) != 5 {
+		t.Errorf("Expected 5 rows, got %d", len(rowIDs))
+	}
+}
+
+func TestGetAllRows(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "products")
+
+	// Insert multiple rows
+	expectedNames := []string{"Product A", "Product B", "Product C"}
+	for _, name := range expectedNames {
+		row := models.NewRow(map[string]interface{}{
+			"name":  name,
+			"price": 99.99,
+		})
+		tree.InsertRow("root/mydb/products", row)
+	}
+
+	// Get all rows
+	allRows, err := tree.GetAllRows("root/mydb/products")
+	if err != nil {
+		t.Fatalf("Failed to get all rows: %v", err)
+	}
+
+	if len(allRows) != 3 {
+		t.Errorf("Expected 3 rows, got %d", len(allRows))
+	}
+
+	// Verify each row has expected fields
+	for _, row := range allRows {
+		if _, ok := row["name"]; !ok {
+			t.Error("Expected 'name' field in row")
+		}
+		if _, ok := row["price"]; !ok {
+			t.Error("Expected 'price' field in row")
+		}
+	}
+}
+
+func TestScanRows(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "items")
+
+	// Insert rows
+	for i := 0; i < 3; i++ {
+		row := models.NewRow(map[string]interface{}{
+			"id":   i,
+			"name": fmt.Sprintf("Item %d", i),
+		})
+		tree.InsertRow("root/mydb/items", row)
+	}
+
+	// Scan rows
+	count := 0
+	err := tree.ScanRows("root/mydb/items", func(rowID string, row models.Row) error {
+		count++
+
+		// Verify row has expected fields
+		if _, ok := row["id"]; !ok {
+			t.Error("Expected 'id' field in row")
+		}
+		if _, ok := row["name"]; !ok {
+			t.Error("Expected 'name' field in row")
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("Failed to scan rows: %v", err)
+	}
+
+	if count != 3 {
+		t.Errorf("Expected to scan 3 rows, scanned %d", count)
+	}
+}
+
+func TestCountRows(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "logs")
+
+	// Insert rows
+	for i := 0; i < 10; i++ {
+		row := models.NewRow(map[string]interface{}{
+			"message": fmt.Sprintf("Log entry %d", i),
+		})
+		tree.InsertRow("root/mydb/logs", row)
+	}
+
+	// Count rows
+	count, err := tree.CountRows("root/mydb/logs")
+	if err != nil {
+		t.Fatalf("Failed to count rows: %v", err)
+	}
+
+	if count != 10 {
+		t.Errorf("Expected count 10, got %d", count)
+	}
+}
+
+func TestRowExists(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert row with known ID
+	row := models.NewRow(map[string]interface{}{
+		"name": "Test User",
+	})
+	tree.InsertRowWithID("root/mydb/users", "known_id", row)
+
+	// Check existence
+	exists, _ := tree.RowExists("root/mydb/users", "known_id")
+	if !exists {
+		t.Error("Expected row to exist")
+	}
+
+	notExists, _ := tree.RowExists("root/mydb/users", "unknown_id")
+	if notExists {
+		t.Error("Expected row to not exist")
+	}
+}
+
+func TestInsertRowInvalidTable(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	// Don't create table
+
+	row := models.NewRow(map[string]interface{}{
+		"name": "Test",
+	})
+
+	// Try to insert in non-existent table
+	_, err := tree.InsertRow("root/mydb/nonexistent", row)
+	if err == nil {
+		t.Error("Expected error when inserting into non-existent table")
+	}
+}
+
+func TestUpdateRowNotFound(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	row := models.NewRow(map[string]interface{}{
+		"name": "Test",
+	})
+
+	// Try to update non-existent row
+	err := tree.UpdateRow("root/mydb/users", "nonexistent", row)
+	if err == nil {
+		t.Error("Expected error when updating non-existent row")
+	}
+}
+
+func TestDeleteRowNotFound(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Try to delete non-existent row
+	err := tree.DeleteRow("root/mydb/users", "nonexistent")
+	if err == nil {
+		t.Error("Expected error when deleting non-existent row")
+	}
+}
+
+func TestRowCRUDWithSchemaEvolution(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert first row with basic fields
+	row1 := models.NewRow(map[string]interface{}{
+		"name": "User 1",
+		"age":  25,
+	})
+	tree.InsertRow("root/mydb/users", row1)
+
+	// Verify schema version 1
+	schema1, _ := tree.GetTableSchema("root/mydb/users")
+	if schema1.Version != 1 {
+		t.Errorf("Expected schema version 1, got %d", schema1.Version)
+	}
+
+	// Insert second row with additional field
+	row2 := models.NewRow(map[string]interface{}{
+		"name":  "User 2",
+		"age":   30,
+		"email": "user2@example.com",
+	})
+	tree.InsertRow("root/mydb/users", row2)
+
+	// Verify schema evolved to version 2
+	schema2, _ := tree.GetTableSchema("root/mydb/users")
+	if schema2.Version != 2 {
+		t.Errorf("Expected schema version 2, got %d", schema2.Version)
+	}
+
+	// Verify schema has 3 fields
+	if len(schema2.Fields) != 3 {
+		t.Errorf("Expected 3 fields, got %d", len(schema2.Fields))
+	}
+}
+
+func TestConcurrentRowInserts(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	done := make(chan bool)
+	numGoroutines := 20
+
+	// Concurrent inserts
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			row := models.NewRow(map[string]interface{}{
+				"id":   id,
+				"name": fmt.Sprintf("User %d", id),
+			})
+			tree.InsertRow("root/mydb/users", row)
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// Verify all rows inserted
+	count, _ := tree.CountRows("root/mydb/users")
+	if count != numGoroutines {
+		t.Errorf("Expected %d rows, got %d", numGoroutines, count)
+	}
+}
+
+func TestBulkOperations(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "bulk_test")
+
+	// Bulk insert
+	numRows := 100
+	rowIDs := make([]string, numRows)
+
+	for i := 0; i < numRows; i++ {
+		row := models.NewRow(map[string]interface{}{
+			"index": i,
+			"data":  fmt.Sprintf("Data %d", i),
+		})
+		rowID, _ := tree.InsertRow("root/mydb/bulk_test", row)
+		rowIDs[i] = rowID
+	}
+
+	// Verify count
+	count, _ := tree.CountRows("root/mydb/bulk_test")
+	if count != numRows {
+		t.Errorf("Expected %d rows, got %d", numRows, count)
+	}
+
+	// Bulk delete (delete every other row)
+	for i := 0; i < numRows; i += 2 {
+		tree.DeleteRow("root/mydb/bulk_test", rowIDs[i])
+	}
+
+	// Verify count after deletion
+	countAfter, _ := tree.CountRows("root/mydb/bulk_test")
+	expected := numRows / 2
+	if countAfter != expected {
+		t.Errorf("Expected %d rows after deletion, got %d", expected, countAfter)
+	}
+}
+
+// ============================================================================
+// Index Tests
+// ============================================================================
+
+func TestCreateSingleFieldIndex(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Create database and table
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name":  models.NewValue("Alice"),
+		"email": models.NewValue("alice@example.com"),
+		"age":   models.NewValue(30),
+	})
+
+	// Create single field index
+	err := tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, false)
+	if err != nil {
+		t.Fatalf("Failed to create index: %v", err)
+	}
+
+	// Verify index exists
+	indexes, _ := tree.ListIndexes("root/mydb/users")
+	if len(indexes) != 1 || indexes[0] != "idx_email" {
+		t.Errorf("Expected index 'idx_email', got: %v", indexes)
+	}
+
+	// Verify index info
+	info, err := tree.GetIndexInfo("root/mydb/users", "idx_email")
+	if err != nil {
+		t.Fatalf("Failed to get index info: %v", err)
+	}
+	if info.Type != IndexTypeSingle {
+		t.Errorf("Expected index type %s, got %s", IndexTypeSingle, info.Type)
+	}
+	if len(info.Fields) != 1 || info.Fields[0] != "email" {
+		t.Errorf("Expected fields [email], got %v", info.Fields)
+	}
+	if info.EntryCount != 1 {
+		t.Errorf("Expected entry count 1, got %d", info.EntryCount)
+	}
+}
+
+func TestCreateCompositeIndex(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Create database and table
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"first_name": models.NewValue("Alice"),
+		"last_name":  models.NewValue("Smith"),
+		"age":        models.NewValue(30),
+	})
+
+	// Create composite index
+	err := tree.CreateIndex("root/mydb/users", "idx_name", []string{"first_name", "last_name"}, false)
+	if err != nil {
+		t.Fatalf("Failed to create composite index: %v", err)
+	}
+
+	// Verify index info
+	info, err := tree.GetIndexInfo("root/mydb/users", "idx_name")
+	if err != nil {
+		t.Fatalf("Failed to get index info: %v", err)
+	}
+	if info.Type != IndexTypeComposite {
+		t.Errorf("Expected index type %s, got %s", IndexTypeComposite, info.Type)
+	}
+	if len(info.Fields) != 2 {
+		t.Errorf("Expected 2 fields, got %d", len(info.Fields))
+	}
+}
+
+func TestCreateUniqueIndex(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Create database and table
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+		"name":  models.NewValue("Alice"),
+	})
+
+	// Create unique index
+	err := tree.CreateIndex("root/mydb/users", "idx_unique_email", []string{"email"}, true)
+	if err != nil {
+		t.Fatalf("Failed to create unique index: %v", err)
+	}
+
+	// Verify index is unique
+	info, _ := tree.GetIndexInfo("root/mydb/users", "idx_unique_email")
+	if !info.Unique {
+		t.Error("Expected index to be unique")
+	}
+
+	// Try to insert duplicate - should fail
+	_, err = tree.InsertRow("root/mydb/users", models.Row{
+		"email": models.NewValue("alice@example.com"),
+		"name":  models.NewValue("Alice2"),
+	})
+	if err == nil {
+		t.Error("Expected error on duplicate unique key, got nil")
+	}
+}
+
+func TestDropIndex(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+	})
+	tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, false)
+
+	// Drop index
+	err := tree.DropIndex("root/mydb/users", "idx_email")
+	if err != nil {
+		t.Fatalf("Failed to drop index: %v", err)
+	}
+
+	// Verify index is gone
+	indexes, _ := tree.ListIndexes("root/mydb/users")
+	if len(indexes) != 0 {
+		t.Errorf("Expected no indexes, got: %v", indexes)
+	}
+
+	// Try to drop non-existent index
+	err = tree.DropIndex("root/mydb/users", "idx_nonexistent")
+	if err == nil {
+		t.Error("Expected error when dropping non-existent index")
+	}
+}
+
+func TestListIndexes(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+		"name":  models.NewValue("Alice"),
+		"age":   models.NewValue(30),
+	})
+
+	// Initially no indexes
+	indexes, _ := tree.ListIndexes("root/mydb/users")
+	if len(indexes) != 0 {
+		t.Errorf("Expected 0 indexes, got %d", len(indexes))
+	}
+
+	// Create multiple indexes
+	tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, false)
+	tree.CreateIndex("root/mydb/users", "idx_name", []string{"name"}, false)
+	tree.CreateIndex("root/mydb/users", "idx_age", []string{"age"}, false)
+
+	// List all indexes
+	indexes, _ = tree.ListIndexes("root/mydb/users")
+	if len(indexes) != 3 {
+		t.Errorf("Expected 3 indexes, got %d", len(indexes))
+	}
+}
+
+func TestRebuildIndex(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+	})
+
+	// Create index
+	tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, false)
+
+	// Insert more data
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"email": models.NewValue("bob@example.com"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"email": models.NewValue("charlie@example.com"),
+	})
+
+	// Rebuild index
+	err := tree.RebuildIndex("root/mydb/users", "idx_email")
+	if err != nil {
+		t.Fatalf("Failed to rebuild index: %v", err)
+	}
+
+	// Verify entry count
+	info, _ := tree.GetIndexInfo("root/mydb/users", "idx_email")
+	if info.EntryCount != 3 {
+		t.Errorf("Expected entry count 3, got %d", info.EntryCount)
+	}
+}
+
+func TestIndexMaintenanceOnInsert(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Create index on empty table
+	tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, false)
+
+	// Insert rows - index should be automatically maintained
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+		"name":  models.NewValue("Alice"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"email": models.NewValue("bob@example.com"),
+		"name":  models.NewValue("Bob"),
+	})
+
+	// Verify index was updated
+	info, _ := tree.GetIndexInfo("root/mydb/users", "idx_email")
+	if info.EntryCount != 2 {
+		t.Errorf("Expected entry count 2, got %d", info.EntryCount)
+	}
+
+	// Test index lookup
+	rowIDs, _ := tree.lookupIndex("root/mydb/users", "idx_email", "alice@example.com")
+	if len(rowIDs) != 1 || rowIDs[0] != "user1" {
+		t.Errorf("Expected [user1], got %v", rowIDs)
+	}
+}
+
+func TestIndexMaintenanceOnUpdate(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert and create index
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+		"name":  models.NewValue("Alice"),
+	})
+	tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, false)
+
+	// Old email should be in index
+	rowIDs, _ := tree.lookupIndex("root/mydb/users", "idx_email", "alice@example.com")
+	if len(rowIDs) != 1 {
+		t.Error("Old email not found in index before update")
+	}
+
+	// Update row - index should be automatically updated
+	tree.UpdateRow("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice.new@example.com"),
+		"name":  models.NewValue("Alice"),
+	})
+
+	// Old email should be removed from index
+	rowIDs, _ = tree.lookupIndex("root/mydb/users", "idx_email", "alice@example.com")
+	if len(rowIDs) != 0 {
+		t.Error("Old email still in index after update")
+	}
+
+	// New email should be in index
+	rowIDs, _ = tree.lookupIndex("root/mydb/users", "idx_email", "alice.new@example.com")
+	if len(rowIDs) != 1 || rowIDs[0] != "user1" {
+		t.Errorf("New email not found in index, got: %v", rowIDs)
+	}
+}
+
+func TestIndexMaintenanceOnDelete(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert and create index
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"email": models.NewValue("bob@example.com"),
+	})
+	tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, false)
+
+	// Verify both entries in index
+	info, _ := tree.GetIndexInfo("root/mydb/users", "idx_email")
+	if info.EntryCount != 2 {
+		t.Errorf("Expected entry count 2, got %d", info.EntryCount)
+	}
+
+	// Delete row - index should be automatically cleaned
+	tree.DeleteRow("root/mydb/users", "user1")
+
+	// Verify index entry count decreased
+	info, _ = tree.GetIndexInfo("root/mydb/users", "idx_email")
+	if info.EntryCount != 1 {
+		t.Errorf("Expected entry count 1 after delete, got %d", info.EntryCount)
+	}
+
+	// Verify deleted email not in index
+	rowIDs, _ := tree.lookupIndex("root/mydb/users", "idx_email", "alice@example.com")
+	if len(rowIDs) != 0 {
+		t.Error("Deleted row still in index")
+	}
+
+	// Verify other email still in index
+	rowIDs, _ = tree.lookupIndex("root/mydb/users", "idx_email", "bob@example.com")
+	if len(rowIDs) != 1 {
+		t.Error("Other row not found in index")
+	}
+}
+
+func TestUniqueIndexViolation(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+	})
+
+	// Create unique index
+	tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, true)
+
+	// Try to insert duplicate - should fail
+	_, err := tree.InsertRow("root/mydb/users", models.Row{
+		"email": models.NewValue("alice@example.com"),
+	})
+	if err == nil {
+		t.Error("Expected error on duplicate unique key during insert")
+	}
+
+	// Try to update to duplicate - should fail
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"email": models.NewValue("bob@example.com"),
+	})
+	err = tree.UpdateRow("root/mydb/users", "user2", models.Row{
+		"email": models.NewValue("alice@example.com"),
+	})
+	if err == nil {
+		t.Error("Expected error on duplicate unique key during update")
+	}
+}
+
+func TestIndexWithNullValues(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert rows with null values
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+		"phone": models.NewValue(nil), // null value
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"email": models.NewValue("bob@example.com"),
+		// phone field missing
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"email": models.NewValue("charlie@example.com"),
+		"phone": models.NewValue("555-1234"),
+	})
+
+	// Create index on phone field
+	tree.CreateIndex("root/mydb/users", "idx_phone", []string{"phone"}, false)
+
+	// Index should only contain non-null values
+	info, _ := tree.GetIndexInfo("root/mydb/users", "idx_phone")
+	if info.EntryCount != 1 {
+		t.Errorf("Expected entry count 1 (only non-null), got %d", info.EntryCount)
+	}
+
+	// Lookup should find the non-null value
+	rowIDs, _ := tree.lookupIndex("root/mydb/users", "idx_phone", "555-1234")
+	if len(rowIDs) != 1 || rowIDs[0] != "user3" {
+		t.Errorf("Expected [user3], got %v", rowIDs)
+	}
+}
+
+func TestLookupIndex(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"city": models.NewValue("New York"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"city": models.NewValue("New York"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"city": models.NewValue("Boston"),
+	})
+
+	// Create index
+	tree.CreateIndex("root/mydb/users", "idx_city", []string{"city"}, false)
+
+	// Lookup New York - should return 2 users
+	rowIDs, err := tree.lookupIndex("root/mydb/users", "idx_city", "New York")
+	if err != nil {
+		t.Fatalf("Lookup failed: %v", err)
+	}
+	if len(rowIDs) != 2 {
+		t.Errorf("Expected 2 users in New York, got %d", len(rowIDs))
+	}
+
+	// Lookup Boston - should return 1 user
+	rowIDs, _ = tree.lookupIndex("root/mydb/users", "idx_city", "Boston")
+	if len(rowIDs) != 1 {
+		t.Errorf("Expected 1 user in Boston, got %d", len(rowIDs))
+	}
+
+	// Lookup non-existent - should return empty
+	rowIDs, _ = tree.lookupIndex("root/mydb/users", "idx_city", "Chicago")
+	if len(rowIDs) != 0 {
+		t.Errorf("Expected 0 users in Chicago, got %d", len(rowIDs))
+	}
+}
+
+func TestLookupIndexRange(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "products")
+
+	// Insert test data with age values
+	tree.InsertRowWithID("root/mydb/products", "prod1", models.Row{
+		"price": models.NewValue(10),
+	})
+	tree.InsertRowWithID("root/mydb/products", "prod2", models.Row{
+		"price": models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/products", "prod3", models.Row{
+		"price": models.NewValue(50),
+	})
+	tree.InsertRowWithID("root/mydb/products", "prod4", models.Row{
+		"price": models.NewValue(75),
+	})
+
+	// Create index
+	tree.CreateIndex("root/mydb/products", "idx_price", []string{"price"}, false)
+
+	// Range lookup: 20-60
+	rowIDs, err := tree.lookupIndexRange("root/mydb/products", "idx_price", "25", "50")
+	if err != nil {
+		t.Fatalf("Range lookup failed: %v", err)
+	}
+	// Should include prod2 and prod3
+	if len(rowIDs) < 1 {
+		t.Errorf("Expected at least 1 result in range, got %d", len(rowIDs))
+	}
+}
+
+func TestCompositeIndexLookup(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "orders")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/orders", "order1", models.Row{
+		"customer_id": models.NewValue("cust1"),
+		"status":      models.NewValue("pending"),
+	})
+	tree.InsertRowWithID("root/mydb/orders", "order2", models.Row{
+		"customer_id": models.NewValue("cust1"),
+		"status":      models.NewValue("completed"),
+	})
+	tree.InsertRowWithID("root/mydb/orders", "order3", models.Row{
+		"customer_id": models.NewValue("cust2"),
+		"status":      models.NewValue("pending"),
+	})
+
+	// Create composite index
+	tree.CreateIndex("root/mydb/orders", "idx_customer_status", []string{"customer_id", "status"}, false)
+
+	// Lookup with composite key: cust1|pending
+	rowIDs, err := tree.lookupIndex("root/mydb/orders", "idx_customer_status", "cust1|pending")
+	if err != nil {
+		t.Fatalf("Composite lookup failed: %v", err)
+	}
+	if len(rowIDs) != 1 || rowIDs[0] != "order1" {
+		t.Errorf("Expected [order1], got %v", rowIDs)
+	}
+}
+
+func TestCreateIndexOnInvalidTable(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Try to create index on non-existent table
+	err := tree.CreateIndex("root/mydb/nonexistent", "idx_test", []string{"field"}, false)
+	if err == nil {
+		t.Error("Expected error when creating index on non-existent table")
+	}
+}
+
+func TestCreateDuplicateIndex(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"email": models.NewValue("alice@example.com"),
+	})
+
+	// Create index
+	tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, false)
+
+	// Try to create same index again - should fail
+	err := tree.CreateIndex("root/mydb/users", "idx_email", []string{"email"}, false)
+	if err == nil {
+		t.Error("Expected error when creating duplicate index")
+	}
+}
+
+// ============================================================================
+// Cursor and Selective Field Loading Tests
+// ============================================================================
+
+func TestGetRowFields(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert a row with multiple fields
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name":  models.NewValue("Alice"),
+		"email": models.NewValue("alice@example.com"),
+		"age":   models.NewValue(30),
+		"city":  models.NewValue("NYC"),
+	})
+
+	// Load only specific fields
+	row, err := tree.GetRowFields("root/mydb/users", "user1", []string{"name", "age"})
+	if err != nil {
+		t.Fatalf("GetRowFields failed: %v", err)
+	}
+
+	// Should have exactly 2 fields
+	if len(row) != 2 {
+		t.Errorf("Expected 2 fields, got %d", len(row))
+	}
+
+	// Should have name and age
+	if _, exists := row["name"]; !exists {
+		t.Error("Expected 'name' field")
+	}
+	if _, exists := row["age"]; !exists {
+		t.Error("Expected 'age' field")
+	}
+
+	// Should NOT have email or city
+	if _, exists := row["email"]; exists {
+		t.Error("Should not have 'email' field")
+	}
+	if _, exists := row["city"]; exists {
+		t.Error("Should not have 'city' field")
+	}
+
+	// Verify values
+	if row["name"].AsString() != "Alice" {
+		t.Errorf("Expected name 'Alice', got '%s'", row["name"].AsString())
+	}
+}
+
+func TestScanRowsWithFields(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name":  models.NewValue("Alice"),
+		"email": models.NewValue("alice@example.com"),
+		"age":   models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name":  models.NewValue("Bob"),
+		"email": models.NewValue("bob@example.com"),
+		"age":   models.NewValue(25),
+	})
+
+	// Scan with only specific fields
+	rowCount := 0
+	err := tree.ScanRowsWithFields("root/mydb/users", []string{"name"}, func(rowID string, row models.Row) error {
+		rowCount++
+
+		// Should have only 'name' field
+		if len(row) != 1 {
+			t.Errorf("Expected 1 field, got %d", len(row))
+		}
+
+		if _, exists := row["name"]; !exists {
+			t.Error("Expected 'name' field")
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("ScanRowsWithFields failed: %v", err)
+	}
+
+	if rowCount != 2 {
+		t.Errorf("Expected 2 rows scanned, got %d", rowCount)
+	}
+}
+
+func TestQueryCursorBasic(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	rowIDs := []string{"user1", "user2", "user3"}
+	for _, rowID := range rowIDs {
+		tree.InsertRowWithID("root/mydb/users", rowID, models.Row{
+			"name": models.NewValue("User_" + rowID),
+		})
+	}
+
+	// Create cursor
+	cursor := tree.NewQueryCursor("root/mydb/users", rowIDs)
+
+	// Test Count
+	if cursor.Count() != 3 {
+		t.Errorf("Expected count 3, got %d", cursor.Count())
+	}
+
+	// Iterate through cursor
+	visitedIDs := []string{}
+	for i := 0; i < cursor.Count(); i++ {
+		id := cursor.CurrentID()
+		visitedIDs = append(visitedIDs, id)
+
+		if i < cursor.Count()-1 && !cursor.Next() {
+			t.Error("Next() should return true")
+		}
+	}
+
+	if len(visitedIDs) != 3 {
+		t.Errorf("Expected to visit 3 rows, visited %d", len(visitedIDs))
+	}
+}
+
+func TestQueryCursorWithLimit(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert 10 rows
+	rowIDs := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		rowID := fmt.Sprintf("user%d", i)
+		rowIDs[i] = rowID
+		tree.InsertRowWithID("root/mydb/users", rowID, models.Row{
+			"name": models.NewValue(fmt.Sprintf("User %d", i)),
+		})
+	}
+
+	// Create cursor with limit of 5
+	cursor := tree.NewQueryCursor("root/mydb/users", rowIDs).WithLimit(5)
+
+	// Iterate
+	count := 0
+	for i := 0; i < cursor.Count(); i++ {
+		count++
+		if !cursor.Next() {
+			break
+		}
+	}
+
+	// Should only iterate 5 times due to limit
+	if count != 5 {
+		t.Errorf("Expected to iterate 5 times with limit, got %d", count)
+	}
+}
+
+func TestQueryCursorWithSkip(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert 10 rows
+	rowIDs := make([]string, 10)
+	for i := 0; i < 10; i++ {
+		rowID := fmt.Sprintf("user%d", i)
+		rowIDs[i] = rowID
+		tree.InsertRowWithID("root/mydb/users", rowID, models.Row{
+			"idx": models.NewValue(i),
+		})
+	}
+
+	// Create cursor with skip of 3
+	cursor := tree.NewQueryCursor("root/mydb/users", rowIDs).WithSkip(3)
+
+	// First row should be user3 (0-indexed, so skip 0, 1, 2)
+	firstID := cursor.CurrentID()
+	if firstID != "user3" {
+		t.Errorf("Expected first ID 'user3' after skip, got '%s'", firstID)
+	}
+}
+
+func TestQueryCursorWithPagination(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert 20 rows
+	rowIDs := make([]string, 20)
+	for i := 0; i < 20; i++ {
+		rowID := fmt.Sprintf("user%02d", i)
+		rowIDs[i] = rowID
+		tree.InsertRowWithID("root/mydb/users", rowID, models.Row{
+			"idx": models.NewValue(i),
+		})
+	}
+
+	// Get page 2 with page size 5 (should be users 5-9)
+	cursor := tree.NewQueryCursor("root/mydb/users", rowIDs).WithPagination(2, 5)
+
+	// Should start at user05
+	firstID := cursor.CurrentID()
+	if firstID != "user05" {
+		t.Errorf("Expected page 2 to start at 'user05', got '%s'", firstID)
+	}
+
+	// Count iterations
+	count := 1 // Already at first position
+	for cursor.Next() {
+		count++
+	}
+
+	if count != 5 {
+		t.Errorf("Expected 5 rows in page, got %d", count)
+	}
+}
+
+func TestSortRowsByFields(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert unsorted data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Charlie"),
+		"age":  models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name": models.NewValue("Alice"),
+		"age":  models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"name": models.NewValue("Bob"),
+		"age":  models.NewValue(35),
+	})
+
+	rowIDs := []string{"user1", "user2", "user3"}
+
+	// Sort by name ascending
+	sortedIDs, err := tree.SortRowsByFields("root/mydb/users", rowIDs, []SortField{
+		{FieldName: "name", Direction: SortAsc},
+	})
+
+	if err != nil {
+		t.Fatalf("SortRowsByFields failed: %v", err)
+	}
+
+	// Should be: Alice (user2), Bob (user3), Charlie (user1)
+	expected := []string{"user2", "user3", "user1"}
+	for i, expectedID := range expected {
+		if sortedIDs[i] != expectedID {
+			t.Errorf("Position %d: expected %s, got %s", i, expectedID, sortedIDs[i])
+		}
+	}
+}
+
+func TestSortRowsByFieldsDescending(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"age": models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"age": models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"age": models.NewValue(35),
+	})
+
+	rowIDs := []string{"user1", "user2", "user3"}
+
+	// Sort by age descending
+	sortedIDs, err := tree.SortRowsByFields("root/mydb/users", rowIDs, []SortField{
+		{FieldName: "age", Direction: SortDesc},
+	})
+
+	if err != nil {
+		t.Fatalf("SortRowsByFields failed: %v", err)
+	}
+
+	// Should be: 35 (user3), 30 (user1), 25 (user2)
+	expected := []string{"user3", "user1", "user2"}
+	for i, expectedID := range expected {
+		if sortedIDs[i] != expectedID {
+			t.Errorf("Position %d: expected %s, got %s", i, expectedID, sortedIDs[i])
+		}
+	}
+}
+
+func TestGetRowIDsOnly(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert data
+	for i := 0; i < 5; i++ {
+		tree.InsertRowWithID("root/mydb/users", fmt.Sprintf("user%d", i), models.Row{
+			"name": models.NewValue(fmt.Sprintf("User %d", i)),
+		})
+	}
+
+	// Get row IDs only (memory efficient)
+	rowIDs, err := tree.GetRowIDsOnly("root/mydb/users")
+	if err != nil {
+		t.Fatalf("GetRowIDsOnly failed: %v", err)
+	}
+
+	if len(rowIDs) != 5 {
+		t.Errorf("Expected 5 row IDs, got %d", len(rowIDs))
+	}
+}
+
+func TestCreateRowCursorsWithFields(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name":  models.NewValue("Alice"),
+		"email": models.NewValue("alice@example.com"),
+		"age":   models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name":  models.NewValue("Bob"),
+		"email": models.NewValue("bob@example.com"),
+		"age":   models.NewValue(25),
+	})
+
+	// Create cursors with only name field
+	cursors, err := tree.CreateRowCursorsWithFields("root/mydb/users", []string{"user1", "user2"}, []string{"name"})
+	if err != nil {
+		t.Fatalf("CreateRowCursorsWithFields failed: %v", err)
+	}
+
+	if len(cursors) != 2 {
+		t.Errorf("Expected 2 cursors, got %d", len(cursors))
+	}
+
+	// Each cursor should have only name field
+	for _, cursor := range cursors {
+		if len(cursor.Fields) != 1 {
+			t.Errorf("Expected 1 field in cursor, got %d", len(cursor.Fields))
+		}
+
+		if _, exists := cursor.Fields["name"]; !exists {
+			t.Error("Expected 'name' field in cursor")
+		}
+	}
+}
+
+// ============================================================================
+// Query Planner and Execution Tests
+// ============================================================================
+
+func TestFindRowsBasic(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Alice"),
+		"age":  models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name": models.NewValue("Bob"),
+		"age":  models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"name": models.NewValue("Charlie"),
+		"age":  models.NewValue(35),
+	})
+
+	// Find rows with age > 26
+	rows, err := tree.FindRows("root/mydb/users", "age > 26", nil)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	// Should return Alice (30) and Charlie (35)
+	if len(rows) != 2 {
+		t.Errorf("Expected 2 rows, got %d", len(rows))
+	}
+}
+
+func TestFindRowsWithIndex(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Alice"),
+		"city": models.NewValue("NYC"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name": models.NewValue("Bob"),
+		"city": models.NewValue("LA"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"name": models.NewValue("Charlie"),
+		"city": models.NewValue("NYC"),
+	})
+
+	// Create index on city
+	tree.CreateIndex("root/mydb/users", "idx_city", []string{"city"}, false)
+
+	// Find rows with city == "NYC" (should use index)
+	rows, err := tree.FindRows("root/mydb/users", `city == "NYC"`, nil)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	// Should return Alice and Charlie
+	if len(rows) != 2 {
+		t.Errorf("Expected 2 rows, got %d", len(rows))
+	}
+
+	// Verify the query used index scan
+	plan, _ := tree.AnalyzeQuery("root/mydb/users", parser.ParseExprQuery(`city == "NYC"`))
+	if plan.Strategy != StrategyIndexScan {
+		t.Error("Expected index scan strategy")
+	}
+}
+
+func TestFindRowsWithLimit(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert 10 rows
+	for i := 0; i < 10; i++ {
+		tree.InsertRowWithID("root/mydb/users", fmt.Sprintf("user%d", i), models.Row{
+			"idx": models.NewValue(i),
+		})
+	}
+
+	// Find rows with limit of 5
+	opts := &QueryOptions{Limit: 5}
+	rows, err := tree.FindRows("root/mydb/users", "idx >= 0", opts)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	if len(rows) != 5 {
+		t.Errorf("Expected 5 rows due to limit, got %d", len(rows))
+	}
+}
+
+func TestFindRowsWithSkip(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert 10 rows
+	for i := 0; i < 10; i++ {
+		tree.InsertRowWithID("root/mydb/users", fmt.Sprintf("user%02d", i), models.Row{
+			"idx": models.NewValue(i),
+		})
+	}
+
+	// Find rows with skip of 3
+	opts := &QueryOptions{Skip: 3, Limit: 5}
+	rows, err := tree.FindRows("root/mydb/users", "idx >= 0", opts)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	// Should return 5 rows starting from position 3
+	if len(rows) != 5 {
+		t.Errorf("Expected 5 rows, got %d", len(rows))
+	}
+}
+
+func TestFindRowsWithSorting(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert unsorted data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Charlie"),
+		"age":  models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name": models.NewValue("Alice"),
+		"age":  models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"name": models.NewValue("Bob"),
+		"age":  models.NewValue(35),
+	})
+
+	// Find rows sorted by name
+	opts := &QueryOptions{
+		SortFields: []SortField{{FieldName: "name", Direction: SortAsc}},
+	}
+	rows, err := tree.FindRows("root/mydb/users", "age > 0", opts)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	// Should be sorted: Alice, Bob, Charlie
+	if len(rows) != 3 {
+		t.Errorf("Expected 3 rows, got %d", len(rows))
+	}
+
+	if rows[0]["name"].AsString() != "Alice" {
+		t.Errorf("Expected first row to be Alice, got %s", rows[0]["name"].AsString())
+	}
+}
+
+func TestCountWhere(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"age": models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"age": models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"age": models.NewValue(35),
+	})
+
+	// Count users with age > 26
+	count, err := tree.CountWhere("root/mydb/users", "age > 26")
+	if err != nil {
+		t.Fatalf("CountWhere failed: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("Expected count 2, got %d", count)
+	}
+}
+
+func TestUpdateRowsWhere(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name":   models.NewValue("Alice"),
+		"status": models.NewValue("pending"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name":   models.NewValue("Bob"),
+		"status": models.NewValue("pending"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"name":   models.NewValue("Charlie"),
+		"status": models.NewValue("active"),
+	})
+
+	// Update all pending users to active
+	count, err := tree.UpdateRowsWhere("root/mydb/users", `status == "pending"`, map[string]interface{}{
+		"status": "active",
+	})
+
+	if err != nil {
+		t.Fatalf("UpdateRowsWhere failed: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("Expected to update 2 rows, updated %d", count)
+	}
+
+	// Verify updates
+	row, _ := tree.GetRow("root/mydb/users", "user1")
+	if row["status"].AsString() != "active" {
+		t.Error("Expected user1 status to be 'active'")
+	}
+}
+
+func TestDeleteRowsWhere(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"age": models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"age": models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"age": models.NewValue(35),
+	})
+
+	// Delete users with age < 30
+	count, err := tree.DeleteRowsWhere("root/mydb/users", "age < 30")
+	if err != nil {
+		t.Fatalf("DeleteRowsWhere failed: %v", err)
+	}
+
+	if count != 1 {
+		t.Errorf("Expected to delete 1 row, deleted %d", count)
+	}
+
+	// Verify deletion
+	remaining, _ := tree.GetRowCount("root/mydb/users")
+	if remaining != 2 {
+		t.Errorf("Expected 2 remaining rows, got %d", remaining)
+	}
+}
+
+func TestFirstRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Charlie"),
+		"age":  models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name": models.NewValue("Alice"),
+		"age":  models.NewValue(25),
+	})
+
+	// Get first row sorted by name
+	row, err := tree.FirstRow("root/mydb/users", "age > 0", []SortField{
+		{FieldName: "name", Direction: SortAsc},
+	})
+
+	if err != nil {
+		t.Fatalf("FirstRow failed: %v", err)
+	}
+
+	if row == nil {
+		t.Fatal("Expected a row, got nil")
+	}
+
+	if row["name"].AsString() != "Alice" {
+		t.Errorf("Expected first row to be Alice, got %s", row["name"].AsString())
+	}
+}
+
+func TestExistsWhere(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Alice"),
+	})
+
+	// Check if Alice exists
+	exists, err := tree.ExistsWhere("root/mydb/users", `name == "Alice"`)
+	if err != nil {
+		t.Fatalf("ExistsWhere failed: %v", err)
+	}
+
+	if !exists {
+		t.Error("Expected Alice to exist")
+	}
+
+	// Check if Bob exists
+	exists, _ = tree.ExistsWhere("root/mydb/users", `name == "Bob"`)
+	if exists {
+		t.Error("Expected Bob not to exist")
+	}
+}
+
+func TestFindRowsCursor(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	for i := 0; i < 5; i++ {
+		tree.InsertRowWithID("root/mydb/users", fmt.Sprintf("user%d", i), models.Row{
+			"idx": models.NewValue(i),
+		})
+	}
+
+	// Get cursor with limit
+	opts := &QueryOptions{Limit: 3}
+	cursor, err := tree.FindRowsCursor("root/mydb/users", "idx >= 0", opts)
+	if err != nil {
+		t.Fatalf("FindRowsCursor failed: %v", err)
+	}
+
+	// Verify cursor behavior
+	if cursor.Count() != 5 {
+		t.Errorf("Expected count 5, got %d", cursor.Count())
+	}
+
+	// Iterate with limit
+	count := 0
+	for i := 0; i < cursor.Count(); i++ {
+		count++
+		if !cursor.Next() {
+			break
+		}
+	}
+
+	// Should stop at 3 due to limit
+	if count != 3 {
+		t.Errorf("Expected to iterate 3 times with limit, got %d", count)
+	}
+}
+
+func TestAnalyzeQuery(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Alice"),
+		"age":  models.NewValue(30),
+	})
+
+	// Create index
+	tree.CreateIndex("root/mydb/users", "idx_name", []string{"name"}, false)
+
+	// Test full scan query
+	plan1, err := tree.AnalyzeQuery("root/mydb/users", parser.ParseExprQuery("age > 25"))
+	if err != nil {
+		t.Fatalf("AnalyzeQuery failed: %v", err)
+	}
+
+	if plan1.Strategy != StrategyFullScan {
+		t.Error("Expected full scan strategy for non-indexed field")
+	}
+
+	// Test index scan query
+	plan2, err := tree.AnalyzeQuery("root/mydb/users", parser.ParseExprQuery(`name == "Alice"`))
+	if err != nil {
+		t.Fatalf("AnalyzeQuery failed: %v", err)
+	}
+
+	if plan2.Strategy != StrategyIndexScan {
+		t.Error("Expected index scan strategy for indexed field")
+	}
+
+	if plan2.IndexName != "idx_name" {
+		t.Errorf("Expected index name 'idx_name', got '%s'", plan2.IndexName)
 	}
 }
