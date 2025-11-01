@@ -1,0 +1,1132 @@
+/* Custom Styles for BlueConfig Admin */
+
+/* ============================================================================
+   CSS Variables for Theming
+   ============================================================================ */
+
+:root[data-theme="light"],
+.light-theme {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8f9fa;
+    --bg-tertiary: #e9ecef;
+    --bg-hover: #e9ecef;
+    --bg-active: #0d6efd;
+
+    --text-primary: #212529;
+    --text-secondary: #6c757d;
+    --text-muted: #6c757d;
+    --text-inverse: #ffffff;
+
+    --border-color: #dee2e6;
+    --border-dark: #adb5bd;
+
+    --tree-bg: #f8f9fa;
+    --tree-hover: #e9ecef;
+    --tree-active: #0d6efd;
+    --tree-toggle: #6c757d;
+
+    --navbar-bg: #212529;
+    --navbar-text: rgba(255, 255, 255, 0.85);
+
+    --code-bg: #f8f9fa;
+    --code-text: #d63384;
+    --pre-bg: #f8f9fa;
+    --pre-border: #dee2e6;
+
+    --input-bg: #ffffff;
+    --input-border: #ced4da;
+    --input-text: #212529;
+
+    --scrollbar-bg: #f1f1f1;
+    --scrollbar-thumb: #888;
+    --scrollbar-thumb-hover: #555;
+}
+
+:root[data-theme="dark"],
+.dark-theme {
+    --bg-primary: #222;
+    --bg-secondary: #333;
+    --bg-tertiary: #444;
+    --bg-hover: #555;
+    --bg-active: #0d6efd;
+
+    --text-primary: #e9ecef;
+    --text-secondary: #adb5bd;
+    --text-muted: #6c757d;
+    --text-inverse: #ffffff;
+
+    --border-color: #444;
+    --border-dark: #555;
+
+    --tree-bg: #333;
+    --tree-hover: #444;
+    --tree-active: #0d6efd;
+    --tree-toggle: #adb5bd;
+
+    --navbar-bg: #111;
+    --navbar-text: rgba(255, 255, 255, 0.85);
+
+    --code-bg: #1a1a1a;
+    --code-text: #ff6b9d;
+    --pre-bg: #1a1a1a;
+    --pre-border: #444;
+
+    --input-bg: #2a2a2a;
+    --input-border: #444;
+    --input-text: #e9ecef;
+
+    --scrollbar-bg: #333;
+    --scrollbar-thumb: #666;
+    --scrollbar-thumb-hover: #888;
+}
+
+/* ============================================================================
+   Layout & General
+   ============================================================================ */
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family:
+        -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen",
+        "Ubuntu", "Cantarell", "Fira Sans", "Droid Sans", "Helvetica Neue",
+        sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    transition:
+        background-color 0.3s ease,
+        color 0.3s ease;
+}
+
+code,
+pre {
+    font-family:
+        source-code-pro, Menlo, Monaco, Consolas, "Courier New", monospace;
+}
+
+/* Ensure full height layout */
+html,
+body,
+#root {
+    height: 100%;
+    overflow: hidden;
+}
+
+/* ============================================================================
+   Tree Component Styles
+   ============================================================================ */
+
+.tree-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.tree-header {
+    padding-bottom: 10px;
+    border-bottom: 2px solid var(--border-color);
+    margin-bottom: 15px;
+}
+
+.tree-header h5 {
+    margin: 0;
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.tree-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Tree Node Styles */
+.tree-node {
+    user-select: none;
+}
+
+.tree-node-content {
+    display: flex;
+    align-items: center;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background-color 0.15s ease;
+    margin-bottom: 2px;
+}
+
+.tree-node-content:hover {
+    background-color: var(--tree-hover);
+}
+
+.tree-node-content.active {
+    background-color: var(--tree-active);
+    color: var(--text-inverse);
+}
+
+.tree-node-content.active .tree-label {
+    font-weight: 600;
+    color: var(--text-inverse) !important;
+}
+
+.tree-node-content.active .tree-icon i {
+    color: var(--text-inverse) !important;
+}
+
+/* Tree Toggle Button */
+.tree-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    margin-right: 5px;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.tree-toggle:hover {
+    opacity: 0.7;
+}
+
+.tree-toggle i {
+    font-size: 14px;
+    color: var(--tree-toggle);
+}
+
+.tree-node-content.active .tree-toggle i {
+    color: var(--text-inverse);
+}
+
+/* Tree Icon */
+.tree-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    margin-right: 8px;
+    flex-shrink: 0;
+}
+
+.tree-icon i {
+    font-size: 16px;
+}
+
+/* Tree Label */
+.tree-label {
+    flex: 1;
+    font-size: 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Tree Children */
+.tree-children {
+    margin-left: 0;
+}
+
+/* ============================================================================
+   Properties Component Styles
+   ============================================================================ */
+
+.properties-container {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.properties-header {
+    margin-bottom: 20px;
+}
+
+.properties-body {
+    flex: 1;
+    overflow-y: auto;
+}
+
+/* Property Table Styles */
+.properties-body table {
+    font-size: 14px;
+}
+
+.properties-body table th {
+    font-weight: 600;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-primary);
+    background-color: var(--bg-secondary);
+    padding: 12px;
+}
+
+.properties-body table td {
+    vertical-align: middle;
+    padding: 12px;
+}
+
+.properties-body table code {
+    background-color: var(--code-bg);
+    padding: 4px 8px;
+    border-radius: 3px;
+    font-size: 13px;
+    color: var(--code-text);
+}
+
+.properties-body table pre {
+    background-color: var(--pre-bg);
+    padding: 10px;
+    border-radius: 4px;
+    border: 1px solid var(--pre-border);
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-primary);
+}
+
+/* Special Properties Highlight */
+.properties-body .text-primary code {
+    color: #0d6efd !important;
+    font-weight: 600;
+}
+
+.dark-theme .properties-body .text-primary code {
+    color: #66b3ff !important;
+}
+
+/* Monospace text in tables */
+
+.dark-theme .font-monospace {
+    color: var(--text-primary);
+}
+
+.dark-theme .properties-body table td span {
+    color: var(--text-primary);
+}
+
+/* Add Property Section */
+.add-property-section {
+    margin-top: 20px;
+}
+
+.add-property-section .card {
+    border: 2px dashed var(--border-color);
+    background-color: var(--bg-secondary);
+}
+
+.add-property-section .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 15px;
+}
+
+/* Button Styles */
+.btn-sm {
+    font-size: 13px;
+    padding: 4px 10px;
+}
+
+/* Form Control Styles */
+.form-control-sm,
+.form-control {
+    font-size: 14px;
+}
+
+textarea.form-control {
+    resize: vertical;
+    min-height: 80px;
+}
+
+/* Badge Styles */
+.badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+/* Alert Styles */
+.alert-sm {
+    padding: 8px 12px;
+    font-size: 13px;
+}
+
+/* ============================================================================
+   Scrollbar Styles
+   ============================================================================ */
+
+/* Custom scrollbar for webkit browsers */
+.tree-body::-webkit-scrollbar,
+.properties-body::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.tree-body::-webkit-scrollbar-track,
+.properties-body::-webkit-scrollbar-track {
+    background: var(--scrollbar-bg);
+    border-radius: 4px;
+}
+
+.tree-body::-webkit-scrollbar-thumb,
+.properties-body::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 4px;
+}
+
+.tree-body::-webkit-scrollbar-thumb:hover,
+.properties-body::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}
+
+/* ============================================================================
+   Responsive Styles
+   ============================================================================ */
+
+@media (max-width: 768px) {
+    .tree-label {
+        font-size: 13px;
+    }
+
+    .properties-body table {
+        font-size: 13px;
+    }
+
+    .tree-node-content {
+        padding: 8px 6px;
+    }
+}
+
+/* ============================================================================
+   Loading & Animation Styles
+   ============================================================================ */
+
+.fa-spinner {
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
+/* Fade in animation for tree nodes */
+.tree-children {
+    animation: fadeIn 0.2s ease-in;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(-5px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ============================================================================
+   Utility Classes
+   ============================================================================ */
+
+.font-monospace {
+    font-family: "Courier New", Courier, monospace;
+}
+
+.cursor-pointer {
+    cursor: pointer;
+}
+
+.text-truncate {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ============================================================================
+   Navigation Styles
+   ============================================================================ */
+
+.navbar-brand {
+    font-weight: 600;
+    font-size: 18px;
+}
+
+.navbar-dark .navbar-nav .nav-link {
+    color: var(--navbar-text);
+    transition: color 0.2s ease;
+}
+
+.navbar-dark .navbar-nav .nav-link:hover {
+    color: rgba(255, 255, 255, 1);
+}
+
+/* ============================================================================
+   Content Type Specific Styles
+   ============================================================================ */
+
+/* JSON highlighting */
+.properties-body pre[data-type="json"] {
+    background-color: #f8f9fa;
+    color: #212529;
+}
+
+/* Markdown preview hint */
+.properties-body .badge.bg-warning {
+    background-color: #ffc107 !important;
+}
+
+/* Image preview */
+.properties-body img {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+}
+
+/* ============================================================================
+   Dark Theme Specific Adjustments
+   ============================================================================ */
+
+.dark-theme .col-md-3 {
+    background-color: var(--bg-secondary) !important;
+    border-right: 1px solid var(--border-color) !important;
+}
+
+.dark-theme .navbar-dark {
+    background-color: var(--navbar-bg) !important;
+}
+
+.dark-theme .table {
+    color: var(--text-primary);
+    background-color: var(--bg-primary);
+}
+
+.dark-theme .table-bordered {
+    border-color: var(--border-color);
+}
+
+.dark-theme .table-bordered td,
+.dark-theme .table-bordered th {
+    border-color: var(--border-color);
+    background-color: #2a2a2a;
+}
+
+.dark-theme .table-bordered th {
+    background-color: #1a1a1a;
+}
+
+.dark-theme .table-hover tbody tr:hover {
+    background-color: #333;
+}
+
+.dark-theme .properties-body table code {
+    background-color: #1a1a1a;
+    border: 1px solid var(--border-color);
+}
+
+.dark-theme .properties-body table pre {
+    background-color: #1a1a1a;
+}
+
+.dark-theme .form-control,
+.dark-theme .form-select {
+    background-color: var(--input-bg);
+    border-color: var(--input-border);
+    color: var(--input-text);
+}
+
+.dark-theme .form-control:focus,
+.dark-theme .form-select:focus {
+    background-color: var(--input-bg);
+    border-color: #0d6efd;
+    color: var(--input-text);
+}
+
+.dark-theme .input-group-text {
+    background-color: var(--bg-tertiary);
+    border-color: var(--input-border);
+    color: var(--text-primary);
+}
+
+.dark-theme .alert-info {
+    background-color: var(--bg-tertiary);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+.dark-theme .card {
+    background-color: var(--bg-secondary);
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+.dark-theme .modal-content {
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.dark-theme .modal-header,
+.dark-theme .modal-footer {
+    border-color: var(--border-color);
+}
+
+.dark-theme .btn-close {
+    filter: invert(1) grayscale(100%) brightness(200%);
+}
+
+.dark-theme .badge {
+    background-color: #2a2a2a;
+    border: 1px solid var(--border-color);
+}
+
+.dark-theme .badge.bg-info {
+    background-color: #0dcaf0 !important;
+    color: #000;
+}
+
+.dark-theme .badge.bg-warning {
+    background-color: #ffc107 !important;
+    color: #000;
+}
+
+.dark-theme .badge.bg-secondary {
+    background-color: #555 !important;
+    color: #e9ecef;
+}
+
+.dark-theme .alert {
+    background-color: #2a2a2a;
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+.dark-theme .alert-info {
+    background-color: #0d47a1;
+    border-color: #1565c0;
+    color: #e3f2fd;
+}
+
+.dark-theme .alert-danger {
+    background-color: #b71c1c;
+    border-color: #c62828;
+    color: #ffebee;
+}
+
+.dark-theme .alert-secondary {
+    background-color: #2a2a2a;
+    border-color: var(--border-color);
+    color: var(--text-primary);
+}
+
+/* ============================================================================
+   Context Menu Styles
+   ============================================================================ */
+
+.context-menu {
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+    border: 2px solid var(--border-dark);
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    min-width: 200px;
+}
+
+.dark-theme .context-menu {
+    border: 2px solid #666;
+    box-shadow:
+        0 6px 24px rgba(0, 0, 0, 0.7),
+        0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.context-menu-header {
+    background-color: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.dark-theme .context-menu-header .text-muted {
+    color: var(--text-secondary) !important;
+}
+
+.dark-theme .context-menu-header i {
+    color: var(--text-secondary);
+}
+
+.context-menu-item {
+    display: block;
+    width: 100%;
+    padding: 8px 16px;
+    border: none;
+    background: none;
+    text-align: left;
+    font-size: 14px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+}
+
+.context-menu-item:hover {
+    background-color: var(--bg-hover);
+}
+
+.context-menu-item i {
+    width: 18px;
+    display: inline-block;
+}
+
+.context-menu-item.text-danger:hover {
+    background-color: #fff5f5;
+}
+
+.dark-theme .context-menu-item.text-danger:hover {
+    background-color: #4a1a1a;
+}
+
+/* ============================================================================
+   Modal Styles
+   ============================================================================ */
+
+.modal-backdrop-custom {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.modal-dialog-custom {
+    background: var(--bg-primary);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    max-width: 500px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.modal-content {
+    border: none;
+}
+
+.modal-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.modal-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.modal-body {
+    padding: 20px;
+}
+
+.modal-footer {
+    padding: 12px 20px;
+    border-top: 1px solid var(--border-color);
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+.btn-close {
+    background: transparent;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    opacity: 0.5;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+}
+
+.btn-close:hover {
+    opacity: 1;
+}
+
+/* Icon Grid */
+.icon-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(50px, 1fr));
+    gap: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+}
+
+.icon-choice {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 50px;
+    height: 50px;
+    border: 2px solid var(--border-color);
+    background: var(--bg-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.icon-choice:hover {
+    border-color: #0d6efd;
+    background-color: #f8f9ff;
+}
+
+.icon-choice.selected {
+    border-color: #0d6efd;
+    background-color: #0d6efd;
+    color: white;
+}
+
+.icon-choice i {
+    font-size: 20px;
+    color: var(--text-primary);
+}
+
+.dark-theme .icon-choice i {
+    color: var(--text-primary);
+}
+
+.dark-theme .icon-choice.selected i {
+    color: white;
+}
+
+/* Color Grid */
+.color-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+    gap: 8px;
+    padding: 8px;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+}
+
+.color-choice {
+    width: 60px;
+    height: 60px;
+    border: 3px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-primary);
+}
+
+.color-choice:hover {
+    border-color: #0d6efd;
+    transform: scale(1.05);
+}
+
+.color-choice.selected {
+    border-color: #0d6efd;
+    border-width: 4px;
+    box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.2);
+}
+
+.color-choice i {
+    font-size: 20px;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.3));
+}
+
+/* Form Controls in Modals */
+.modal-body .form-label {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-bottom: 6px;
+}
+
+.modal-body .form-control {
+    font-size: 14px;
+}
+
+.modal-body .text-muted {
+    font-size: 12px;
+    color: var(--text-muted) !important;
+}
+
+/* ============================================================================
+   Landing Page Styles
+   ============================================================================ */
+
+.landing-page {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.landing-background {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    z-index: 0;
+}
+
+.landing-background::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.05'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+    opacity: 0.3;
+}
+
+.dark-theme .landing-background {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+}
+
+.landing-content {
+    position: relative;
+    z-index: 1;
+    width: 100%;
+    max-width: 500px;
+}
+
+.landing-card {
+    background: rgba(255, 255, 255, 0.95);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    padding: 40px;
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.1),
+        0 0 0 1px rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.dark-theme .landing-card {
+    background: rgba(34, 34, 34, 0.95);
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.5),
+        0 0 0 1px rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.landing-header {
+    text-align: center;
+    margin-bottom: 30px;
+}
+
+.landing-logo {
+    width: 80px;
+    height: 80px;
+    margin: 0 auto 20px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+}
+
+.landing-logo i {
+    font-size: 40px;
+    color: white;
+}
+
+.landing-title {
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    color: var(--text-primary);
+}
+
+.landing-subtitle {
+    font-size: 16px;
+    color: var(--text-secondary);
+    margin-bottom: 0;
+}
+
+.stores-list {
+    max-height: 400px;
+    overflow-y: auto;
+    margin-bottom: 20px;
+}
+
+.store-item {
+    display: flex;
+    align-items: center;
+    padding: 16px;
+    margin-bottom: 10px;
+    background: var(--bg-secondary);
+    border: 2px solid var(--border-color);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.store-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    border-color: #667eea;
+}
+
+.dark-theme .store-item:hover {
+    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.store-icon {
+    width: 50px;
+    height: 50px;
+    border-radius: 10px;
+    background: var(--bg-tertiary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 16px;
+    flex-shrink: 0;
+}
+
+.store-icon i {
+    font-size: 24px;
+}
+
+.store-info {
+    flex: 1;
+}
+
+.store-name {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.store-description {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+
+.store-meta {
+    font-size: 12px;
+}
+
+.store-arrow {
+    color: var(--text-muted);
+    margin-left: 10px;
+}
+
+.landing-footer {
+    margin-top: 20px;
+}
+
+.create-store-form {
+    background: var(--bg-secondary);
+    padding: 20px;
+    border-radius: 12px;
+    margin-top: 20px;
+    border: 2px dashed var(--border-color);
+}
+
+.create-store-form h5 {
+    color: var(--text-primary);
+}
+
+.landing-page-footer {
+    text-align: center;
+    margin-top: 20px;
+    opacity: 0.7;
+}
+
+/* ============================================================================
+   Theme Toggle Button
+   ============================================================================ */
+
+.theme-toggle-btn {
+    background: none;
+    border: none;
+    color: var(--navbar-text);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 8px 12px;
+    transition: opacity 0.2s ease;
+}
+
+.theme-toggle-btn:hover {
+    opacity: 0.8;
+}
+
+
+/* Collapsible Sidebar Styles */
+.collapsed-sidebar {
+    flex: 0 0 0 !important;
+    max-width: 0 !important;
+}
+
+.transition-all {
+    transition: all 0.3s ease-in-out;
+}
+
+/* Hover effect for toggle button */
+.sidebar-toggle-btn {
+    opacity: 0.9;
+    transition: all 0.2s ease;
+}
+
+.sidebar-toggle-btn:hover {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+.sidebar-toggle-btn:active {
+    transform: scale(0.95);
+}
+
+
+/* Dark theme support for sidebar */
+.dark-theme .bg-light {
+    background-color: var(--bg-secondary) !important;
+}
+
+.dark-theme .border-end {
+    border-right-color: var(--border-color) !important;
+}
+
+/* Dark theme support for sensor detail text */
+.dark-theme .card .text-muted {
+    color: #adb5bd !important;
+}
+
+.dark-theme .card .font-monospace {
+    color: #dee2e6 !important;
+}
+
+.dark-theme .card small.text-muted {
+    color: #adb5bd !important;
+}

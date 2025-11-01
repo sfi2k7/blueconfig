@@ -1,0 +1,1 @@
+rsync -azv --exclude=cmd/configserver/configserver  --exclude=bmweb/node_modules --exclude=bmweb/bmweb --exclude=bmjob/bmjob  --exclude=*.exe  --exclude '.git' --delete . root@troy:/root/go/src/github.com/sfi2k7/blueconfig

@@ -2,7 +2,7 @@ Registry Based:
     All status are posted to .Watches in Registry
 Probes:
     Ping - ping host {host:, }
-    Http Status Code - GET url 
+    Http Status Code - GET url
     Row Count (Mongo, SQL) - count
     Date range (Mongo, SQL)
     SystemD service Status - systemctl status
@@ -10,3 +10,24 @@ Probes:
     Redis KEY - redis get
     Redis List count - redis len
     last ID change (Mongo and SQL) - latest id
+
+
+
+Allow Node-Relationships - Graph Like
+Auto Load Node props when A node is loaded.
+
+
+
+Timeseries Data:
+    /Sensors/HitCount {
+        __type timeseries
+        __sub_type counter / guage
+    }
+
+Push to /Sensors/HitCount with { value:, ts: }
+    blueconfig will assign the id to sensor and create new
+        node under HitCount
+
+Pull On: /Sensors/HitCount { window:5m, interval:1m }
+    returns 5 points with total, average, min, max and value
+    get min, get max, get avg, get last value

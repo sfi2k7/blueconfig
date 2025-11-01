@@ -1,0 +1,101 @@
+[
+    {
+      "zip_code": 501,
+      "latitude": 40.922326,
+      "longitude": -72.637078,
+      "city": "Holtsville",
+      "state": "NY",
+      "county": "Suffolk"
+    },
+    {
+      "zip_code": 544,
+      "latitude": 40.922326,
+      "longitude": -72.637078,
+      "city": "Holtsville",
+      "state": "NY",
+      "county": "Suffolk"
+    },
+    {
+      "zip_code": 601,
+      "latitude": 18.165273,
+      "longitude": -66.722583,
+      "city": "Adjuntas",
+      "state": "PR",
+      "county": "Adjuntas"
+    },
+    {
+      "zip_code": 602,
+      "latitude": 18.393103,
+      "longitude": -67.180953,
+      "city": "Aguada",
+      "state": "PR",
+      "county": "Aguada"
+    },
+    {
+      "zip_code": 603,
+      "latitude": 18.455913,
+      "longitude": -67.14578,
+      "city": "Aguadilla",
+      "state": "PR",
+      "county": "Aguadilla"
+    },
+    {
+      "zip_code": 604,
+      "latitude": 18.49352,
+      "longitude": -67.135883,
+      "city": "Aguadilla",
+      "state": "PR",
+      "county": "Aguadilla"
+    },
+    {
+      "zip_code": 605,
+      "latitude": 18.465162,
+      "longitude": -67.141486,
+      "city": "Aguadilla",
+      "state": "PR",
+      "county": "Aguadilla"
+    },
+    {
+      "zip_code": 606,
+      "latitude": 18.172947,
+      "longitude": -66.944111,
+      "city": "Maricao",
+      "state": "PR",
+      "county": "Maricao"
+    },
+    {
+      "zip_code": 610,
+      "latitude": 18.288685,
+      "longitude": -67.139696,
+      "city": "Anasco",
+      "state": "PR",
+      "county": "Anasco"
+    },
+    {
+      "zip_code": 611,
+      "latitude": 18.279531,
+      "longitude": -66.80217,
+      "city": "Angeles",
+      "state": "PR",
+      "county": "Utuado"
+    },
+    {
+      "zip_code": 612,
+      "latitude": 18.450674,
+      "longitude": -66.698262,
+      "city": "Arecibo",
+      "state": "PR",
+      "county": "Arecibo"
+    },
+    {
+      "zip_code": 613,
+      "latitude": 18.458093,
+      "longitude": -66.732732,
+      "city": "Arecibo",
+      "state": "PR",
+      "county": "Arecibo"
+    },
+    {
+      "zip_code": 614,
+      "latitude": 18.429675,
+  ]

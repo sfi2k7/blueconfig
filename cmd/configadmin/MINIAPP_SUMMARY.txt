@@ -1,0 +1,123 @@
+MINI-APP ARCHITECTURE - IMPLEMENTATION SUMMARY
+==============================================
+
+IMPLEMENTATION COMPLETE ✓
+
+Frontend Files Created/Modified:
+---------------------------------
+1. RightPanel.js (52 lines) - Router component
+2. MiniAppContainer.js (33 lines) - Registry & loader
+3. DefaultProperties.js (577 lines) - Moved from Properties.js
+4. HomePage.js (updated) - Uses RightPanel instead of Properties
+
+Timeseries Mini-App (Frontend):
+--------------------------------
+5. timeseries/TimeseriesDashboard.js (158 lines) - Main component
+6. timeseries/SensorList.js (56 lines) - Sensor browser
+7. timeseries/SensorControls.js (56 lines) - Time range controls
+8. timeseries/SensorChart.js (149 lines) - Recharts visualization
+9. timeseries/EventLog.js (104 lines) - Auto-refresh event stream
+10. timeseries/SensorDetail.js (145 lines) - Metadata & actions
+11. timeseries/index.js (3 lines) - Export
+
+Backend API Handlers (Go):
+---------------------------
+12. main.go - Added 10 timeseries endpoints (327 lines)
+   - initTimeseries
+   - listSensors
+   - createSensor
+   - getSensorInfo
+   - getAllEvents
+   - getLatestValue
+   - getSensorData
+   - postEvent
+   - deleteOldEvents
+   - deleteSensor
+
+Total: 1,610 lines of new code
+
+Architecture:
+-------------
+HomePage
+  └─ RightPanel (router)
+      └─ MiniAppContainer (registry)
+          ├─ DefaultProperties (default)
+          └─ TimeseriesDashboard (__type: "timeseries")
+              ├─ SensorList
+              ├─ SensorControls
+              ├─ SensorChart
+              ├─ EventLog
+              └─ SensorDetail
+
+How It Works:
+-------------
+1. Click node in tree
+2. RightPanel loads node properties
+3. Check __type property
+4. MiniAppContainer loads appropriate component:
+   - __type: "timeseries" → TimeseriesDashboard
+   - __type: undefined → DefaultProperties
+   - __type: unknown → DefaultProperties (fallback)
+
+Timeseries Dashboard Features:
+------------------------------
+✓ List all sensors with metadata
+✓ Select sensor to view data
+✓ Interactive charts (min/max/avg)
+✓ Time range selection (5m - 24h)
+✓ Interval configuration (10s - 1h)
+✓ Real-time event log (auto-refresh 5s)
+✓ Sensor details & statistics
+✓ Delete sensor action
+✓ Cleanup old events action
+✓ Responsive layout
+
+API Endpoints (Implemented):
+-----------------------------
+POST /api/timeseries/init
+GET  /api/timeseries/sensors
+POST /api/timeseries/sensors/create
+GET  /api/timeseries/sensors/{sensor}/info
+GET  /api/timeseries/sensors/{sensor}/data
+GET  /api/timeseries/sensors/{sensor}/events
+GET  /api/timeseries/sensors/{sensor}/latest
+POST /api/timeseries/sensors/{sensor}/event
+POST /api/timeseries/sensors/{sensor}/cleanup
+DEL  /api/timeseries/sensors/{sensor}
+
+Tech Stack:
+-----------
+- React 19
+- Redux Toolkit
+- Recharts (charts)
+- Bootstrap 5
+- Font Awesome icons
+- Axios
+
+Build Status:
+-------------
+✓ Frontend webpack build successful
+✓ Backend Go build successful
+✓ No errors
+✓ 2 webpack warnings (acceptable)
+✓ Frontend bundle size: 346 KiB
+
+Testing:
+--------
+1. Build backend: cd cmd/configadmin && go build
+2. Initialize timeseries in store:
+   - tree.InitTimeseries()
+   - Create sensors via API or direct calls
+3. Start frontend dev: npm start
+4. Start backend: ./configadmin
+5. Access: http://localhost:8214
+6. Select store, navigate to timeseries node
+7. Dashboard loads automatically
+
+Future Extensions:
+------------------
+- Add more mini-apps (form builder, chart viewer, etc.)
+- Real-time WebSocket updates
+- Export data functionality
+- Sensor comparison view
+- Alert configuration
