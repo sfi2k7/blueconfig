@@ -4095,3 +4095,571 @@ func TestBulkUpsert(t *testing.T) {
 		t.Error("user3 should be inserted")
 	}
 }
+
+// ============================================================================
+// Range Query Tests
+// ============================================================================
+
+func TestFindRowsRange(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "products")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/products", "p1", models.NewRow(map[string]interface{}{"name": "A", "price": 10}))
+	tree.InsertRowWithID("root/mydb/products", "p2", models.NewRow(map[string]interface{}{"name": "B", "price": 20}))
+	tree.InsertRowWithID("root/mydb/products", "p3", models.NewRow(map[string]interface{}{"name": "C", "price": 30}))
+	tree.InsertRowWithID("root/mydb/products", "p4", models.NewRow(map[string]interface{}{"name": "D", "price": 40}))
+
+	// Create index on price
+	tree.CreateIndex("root/mydb/products", "idx_price", []string{"price"}, false)
+
+	// Find rows with price between 15 and 35
+	rows, err := tree.FindRowsRange("root/mydb/products", "idx_price", 15, 35)
+	if err != nil {
+		t.Fatalf("FindRowsRange failed: %v", err)
+	}
+
+	if len(rows) != 2 {
+		t.Errorf("Expected 2 rows (price 20, 30), got %d", len(rows))
+	}
+}
+
+func TestFindRowsBetween(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "scores")
+
+	// Insert test data
+	for i := 1; i <= 10; i++ {
+		tree.InsertRowWithID("root/mydb/scores", fmt.Sprintf("s%d", i), models.NewRow(map[string]interface{}{"value": i * 10}))
+	}
+
+	tree.CreateIndex("root/mydb/scores", "idx_value", []string{"value"}, false)
+
+	// Find scores between 30 and 70
+	rows, err := tree.FindRowsBetween("root/mydb/scores", "idx_value", 30, 70)
+	if err != nil {
+		t.Fatalf("FindRowsBetween failed: %v", err)
+	}
+
+	if len(rows) != 5 {
+		t.Errorf("Expected 5 rows (30, 40, 50, 60, 70), got %d", len(rows))
+	}
+}
+
+func TestFindRowsGreaterThan(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "items")
+
+	tree.InsertRowWithID("root/mydb/items", "i1", models.NewRow(map[string]interface{}{"qty": 5}))
+	tree.InsertRowWithID("root/mydb/items", "i2", models.NewRow(map[string]interface{}{"qty": 10}))
+	tree.InsertRowWithID("root/mydb/items", "i3", models.NewRow(map[string]interface{}{"qty": 15}))
+
+	tree.CreateIndex("root/mydb/items", "idx_qty", []string{"qty"}, false)
+
+	rows, err := tree.FindRowsGreaterThan("root/mydb/items", "idx_qty", 7)
+	if err != nil {
+		t.Fatalf("FindRowsGreaterThan failed: %v", err)
+	}
+
+	if len(rows) != 2 {
+		t.Errorf("Expected 2 rows (10, 15), got %d", len(rows))
+	}
+}
+
+func TestFindRowsLessThanOrEqual(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "items")
+
+	tree.InsertRowWithID("root/mydb/items", "i1", models.NewRow(map[string]interface{}{"qty": 5}))
+	tree.InsertRowWithID("root/mydb/items", "i2", models.NewRow(map[string]interface{}{"qty": 10}))
+	tree.InsertRowWithID("root/mydb/items", "i3", models.NewRow(map[string]interface{}{"qty": 15}))
+
+	tree.CreateIndex("root/mydb/items", "idx_qty", []string{"qty"}, false)
+
+	rows, err := tree.FindRowsLessThanOrEqual("root/mydb/items", "idx_qty", 10)
+	if err != nil {
+		t.Fatalf("FindRowsLessThanOrEqual failed: %v", err)
+	}
+
+	if len(rows) != 2 {
+		t.Errorf("Expected 2 rows (5, 10), got %d", len(rows))
+	}
+}
+
+// ============================================================================
+// Distinct Value Tests
+// ============================================================================
+
+func TestGetDistinctValues(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert rows with duplicate cities
+	tree.InsertRowWithID("root/mydb/users", "u1", models.NewRow(map[string]interface{}{"city": "NYC"}))
+	tree.InsertRowWithID("root/mydb/users", "u2", models.NewRow(map[string]interface{}{"city": "LA"}))
+	tree.InsertRowWithID("root/mydb/users", "u3", models.NewRow(map[string]interface{}{"city": "NYC"}))
+	tree.InsertRowWithID("root/mydb/users", "u4", models.NewRow(map[string]interface{}{"city": "SF"}))
+	tree.InsertRowWithID("root/mydb/users", "u5", models.NewRow(map[string]interface{}{"city": "LA"}))
+
+	values, err := tree.GetDistinctValues("root/mydb/users", "city")
+	if err != nil {
+		t.Fatalf("GetDistinctValues failed: %v", err)
+	}
+
+	if len(values) != 3 {
+		t.Errorf("Expected 3 distinct cities (NYC, LA, SF), got %d", len(values))
+	}
+}
+
+func TestCountDistinct(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "orders")
+
+	// Insert rows
+	tree.InsertRowWithID("root/mydb/orders", "o1", models.NewRow(map[string]interface{}{"customer_id": "c1"}))
+	tree.InsertRowWithID("root/mydb/orders", "o2", models.NewRow(map[string]interface{}{"customer_id": "c2"}))
+	tree.InsertRowWithID("root/mydb/orders", "o3", models.NewRow(map[string]interface{}{"customer_id": "c1"}))
+	tree.InsertRowWithID("root/mydb/orders", "o4", models.NewRow(map[string]interface{}{"customer_id": "c3"}))
+
+	count, err := tree.CountDistinct("root/mydb/orders", "customer_id")
+	if err != nil {
+		t.Fatalf("CountDistinct failed: %v", err)
+	}
+
+	if count != 3 {
+		t.Errorf("Expected 3 distinct customers, got %d", count)
+	}
+}
+
+// ============================================================================
+// Atomic Operation Tests
+// ============================================================================
+
+func TestIncrementField(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "counters")
+
+	tree.InsertRowWithID("root/mydb/counters", "c1", models.NewRow(map[string]interface{}{"count": 10}))
+
+	// Increment by 5
+	newValue, err := tree.IncrementField("root/mydb/counters", "c1", "count", 5)
+	if err != nil {
+		t.Fatalf("IncrementField failed: %v", err)
+	}
+
+	if newValue != 15 {
+		t.Errorf("Expected 15, got %d", newValue)
+	}
+
+	// Verify value in database
+	row, _ := tree.GetRow("root/mydb/counters", "c1")
+	count, _ := row["count"].AsInt64()
+	if count != 15 {
+		t.Errorf("Expected count 15 in DB, got %d", count)
+	}
+}
+
+func TestDecrementField(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "inventory")
+
+	tree.InsertRowWithID("root/mydb/inventory", "item1", models.NewRow(map[string]interface{}{"stock": 100}))
+
+	newValue, err := tree.DecrementField("root/mydb/inventory", "item1", "stock", 25)
+	if err != nil {
+		t.Fatalf("DecrementField failed: %v", err)
+	}
+
+	if newValue != 75 {
+		t.Errorf("Expected 75, got %d", newValue)
+	}
+}
+
+func TestSetFieldIfNotExists(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "config")
+
+	tree.InsertRowWithID("root/mydb/config", "cfg1", models.NewRow(map[string]interface{}{"key": "timeout"}))
+
+	// Set value on non-existing field
+	wasSet, err := tree.SetFieldIfNotExists("root/mydb/config", "cfg1", "value", "30s")
+	if err != nil {
+		t.Fatalf("SetFieldIfNotExists failed: %v", err)
+	}
+
+	if !wasSet {
+		t.Error("Expected field to be set")
+	}
+
+	// Try to set again (should not overwrite)
+	wasSet, err = tree.SetFieldIfNotExists("root/mydb/config", "cfg1", "value", "60s")
+	if err != nil {
+		t.Fatalf("SetFieldIfNotExists failed: %v", err)
+	}
+
+	if wasSet {
+		t.Error("Expected field NOT to be set (already exists)")
+	}
+
+	// Verify value is still 30s
+	row, _ := tree.GetRow("root/mydb/config", "cfg1")
+	if row["value"] == nil || row["value"].AsString() != "30s" {
+		t.Errorf("Value should still be 30s, got: %v", row["value"])
+	}
+}
+
+// ============================================================================
+// Join Operation Tests
+// ============================================================================
+
+func TestInnerJoin(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+	tree.CreateTable("root/mydb", "orders")
+
+	// Insert users
+	tree.InsertRowWithID("root/mydb/users", "u1", models.NewRow(map[string]interface{}{"user_id": "1", "name": "Alice"}))
+	tree.InsertRowWithID("root/mydb/users", "u2", models.NewRow(map[string]interface{}{"user_id": "2", "name": "Bob"}))
+	tree.InsertRowWithID("root/mydb/users", "u3", models.NewRow(map[string]interface{}{"user_id": "3", "name": "Charlie"}))
+
+	// Insert orders (only for users 1 and 2)
+	tree.InsertRowWithID("root/mydb/orders", "o1", models.NewRow(map[string]interface{}{"user_id": "1", "amount": 100}))
+	tree.InsertRowWithID("root/mydb/orders", "o2", models.NewRow(map[string]interface{}{"user_id": "1", "amount": 200}))
+	tree.InsertRowWithID("root/mydb/orders", "o3", models.NewRow(map[string]interface{}{"user_id": "2", "amount": 150}))
+
+	// Inner join
+	results, err := tree.InnerJoin("root/mydb/users", "root/mydb/orders", "user_id", "user_id")
+	if err != nil {
+		t.Fatalf("InnerJoin failed: %v", err)
+	}
+
+	// Should return 3 results (user1 with 2 orders, user2 with 1 order)
+	// User3 has no orders, so not included
+	if len(results) != 3 {
+		t.Errorf("Expected 3 join results, got %d", len(results))
+	}
+
+	// Verify one of the results
+	found := false
+	for _, r := range results {
+		if r.LeftRow["name"].AsString() == "Alice" && r.RightRow["amount"].AsString() == "100" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected to find Alice with order amount 100")
+	}
+}
+
+func TestLeftJoin(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+	tree.CreateTable("root/mydb", "orders")
+
+	// Insert users
+	tree.InsertRowWithID("root/mydb/users", "u1", models.NewRow(map[string]interface{}{"user_id": "1", "name": "Alice"}))
+	tree.InsertRowWithID("root/mydb/users", "u2", models.NewRow(map[string]interface{}{"user_id": "2", "name": "Bob"}))
+	tree.InsertRowWithID("root/mydb/users", "u3", models.NewRow(map[string]interface{}{"user_id": "3", "name": "Charlie"}))
+
+	// Insert orders (only for users 1 and 2)
+	tree.InsertRowWithID("root/mydb/orders", "o1", models.NewRow(map[string]interface{}{"user_id": "1", "amount": 100}))
+	tree.InsertRowWithID("root/mydb/orders", "o2", models.NewRow(map[string]interface{}{"user_id": "2", "amount": 150}))
+
+	// Left join
+	results, err := tree.LeftJoin("root/mydb/users", "root/mydb/orders", "user_id", "user_id")
+	if err != nil {
+		t.Fatalf("LeftJoin failed: %v", err)
+	}
+
+	// Should return 3 results (all users, Charlie with nil RightRow)
+	if len(results) != 3 {
+		t.Errorf("Expected 3 join results, got %d", len(results))
+	}
+
+	// Find Charlie with no orders
+	found := false
+	for _, r := range results {
+		if r.LeftRow["name"].AsString() == "Charlie" && r.RightRow == nil {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Expected Charlie with nil RightRow (no orders)")
+	}
+}
+
+// ============================================================================
+// Aggregation Tests
+// ============================================================================
+
+func TestAggregate(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "sales")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/sales", "s1", models.NewRow(map[string]interface{}{"amount": 100}))
+	tree.InsertRowWithID("root/mydb/sales", "s2", models.NewRow(map[string]interface{}{"amount": 200}))
+	tree.InsertRowWithID("root/mydb/sales", "s3", models.NewRow(map[string]interface{}{"amount": 150}))
+
+	result, err := tree.Aggregate("root/mydb/sales", "amount")
+	if err != nil {
+		t.Fatalf("Aggregate failed: %v", err)
+	}
+
+	if result.Count != 3 {
+		t.Errorf("Expected count 3, got %d", result.Count)
+	}
+
+	if result.Sum != 450 {
+		t.Errorf("Expected sum 450, got %f", result.Sum)
+	}
+
+	if result.Avg != 150 {
+		t.Errorf("Expected avg 150, got %f", result.Avg)
+	}
+}
+
+func TestSum(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "transactions")
+
+	tree.InsertRowWithID("root/mydb/transactions", "t1", models.NewRow(map[string]interface{}{"amount": 50}))
+	tree.InsertRowWithID("root/mydb/transactions", "t2", models.NewRow(map[string]interface{}{"amount": 75}))
+	tree.InsertRowWithID("root/mydb/transactions", "t3", models.NewRow(map[string]interface{}{"amount": 25}))
+
+	sum, err := tree.Sum("root/mydb/transactions", "amount")
+	if err != nil {
+		t.Fatalf("Sum failed: %v", err)
+	}
+
+	if sum != 150 {
+		t.Errorf("Expected sum 150, got %f", sum)
+	}
+}
+
+func TestAvg(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "scores")
+
+	tree.InsertRowWithID("root/mydb/scores", "s1", models.NewRow(map[string]interface{}{"score": 80}))
+	tree.InsertRowWithID("root/mydb/scores", "s2", models.NewRow(map[string]interface{}{"score": 90}))
+	tree.InsertRowWithID("root/mydb/scores", "s3", models.NewRow(map[string]interface{}{"score": 70}))
+
+	avg, err := tree.Avg("root/mydb/scores", "score")
+	if err != nil {
+		t.Fatalf("Avg failed: %v", err)
+	}
+
+	if avg != 80 {
+		t.Errorf("Expected avg 80, got %f", avg)
+	}
+}
+
+func TestMinMax(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "temperatures")
+
+	tree.InsertRowWithID("root/mydb/temperatures", "t1", models.NewRow(map[string]interface{}{"temp": 20}))
+	tree.InsertRowWithID("root/mydb/temperatures", "t2", models.NewRow(map[string]interface{}{"temp": 35}))
+	tree.InsertRowWithID("root/mydb/temperatures", "t3", models.NewRow(map[string]interface{}{"temp": 15}))
+
+	min, err := tree.Min("root/mydb/temperatures", "temp")
+	if err != nil {
+		t.Fatalf("Min failed: %v", err)
+	}
+
+	max, err := tree.Max("root/mydb/temperatures", "temp")
+	if err != nil {
+		t.Fatalf("Max failed: %v", err)
+	}
+
+	minFloat, _ := models.NewValue(min).AsFloat64()
+	maxFloat, _ := models.NewValue(max).AsFloat64()
+
+	if minFloat != 15 {
+		t.Errorf("Expected min 15, got %f", minFloat)
+	}
+
+	if maxFloat != 35 {
+		t.Errorf("Expected max 35, got %f", maxFloat)
+	}
+}
+
+func TestGroupBy(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "sales")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/sales", "s1", models.NewRow(map[string]interface{}{"region": "West", "amount": 100}))
+	tree.InsertRowWithID("root/mydb/sales", "s2", models.NewRow(map[string]interface{}{"region": "East", "amount": 200}))
+	tree.InsertRowWithID("root/mydb/sales", "s3", models.NewRow(map[string]interface{}{"region": "West", "amount": 150}))
+	tree.InsertRowWithID("root/mydb/sales", "s4", models.NewRow(map[string]interface{}{"region": "East", "amount": 250}))
+
+	groups, err := tree.GroupBy("root/mydb/sales", "region", "amount")
+	if err != nil {
+		t.Fatalf("GroupBy failed: %v", err)
+	}
+
+	if len(groups) != 2 {
+		t.Errorf("Expected 2 groups (West, East), got %d", len(groups))
+	}
+
+	// Check West group
+	westGroup, exists := groups["West"]
+	if !exists {
+		t.Fatal("West group not found")
+	}
+
+	if westGroup.Count != 2 {
+		t.Errorf("Expected West count 2, got %d", westGroup.Count)
+	}
+
+	if westGroup.Sum != 250 {
+		t.Errorf("Expected West sum 250, got %f", westGroup.Sum)
+	}
+
+	if westGroup.Avg != 125 {
+		t.Errorf("Expected West avg 125, got %f", westGroup.Avg)
+	}
+}
+
+// ============================================================================
+// Subquery Tests
+// ============================================================================
+
+func TestExistsInSubquery(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "customers")
+	tree.CreateTable("root/mydb", "orders")
+
+	// Insert customers
+	tree.InsertRowWithID("root/mydb/customers", "c1", models.NewRow(map[string]interface{}{"customer_id": "1", "name": "Alice"}))
+	tree.InsertRowWithID("root/mydb/customers", "c2", models.NewRow(map[string]interface{}{"customer_id": "2", "name": "Bob"}))
+	tree.InsertRowWithID("root/mydb/customers", "c3", models.NewRow(map[string]interface{}{"customer_id": "3", "name": "Charlie"}))
+
+	// Insert orders (only for customers 1 and 2)
+	tree.InsertRowWithID("root/mydb/orders", "o1", models.NewRow(map[string]interface{}{"customer_id": "1"}))
+	tree.InsertRowWithID("root/mydb/orders", "o2", models.NewRow(map[string]interface{}{"customer_id": "2"}))
+
+	// Check which customers have orders
+	results, err := tree.ExistsInSubquery("root/mydb/customers", "customer_id", "root/mydb/orders", "customer_id")
+	if err != nil {
+		t.Fatalf("ExistsInSubquery failed: %v", err)
+	}
+
+	if !results["c1"] {
+		t.Error("Customer c1 should exist in orders")
+	}
+
+	if !results["c2"] {
+		t.Error("Customer c2 should exist in orders")
+	}
+
+	if results["c3"] {
+		t.Error("Customer c3 should NOT exist in orders")
+	}
+}
+
+func TestInSubquery(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "products")
+	tree.CreateTable("root/mydb", "sold_products")
+
+	// Insert products
+	tree.InsertRowWithID("root/mydb/products", "p1", models.NewRow(map[string]interface{}{"product_id": "100", "name": "Widget"}))
+	tree.InsertRowWithID("root/mydb/products", "p2", models.NewRow(map[string]interface{}{"product_id": "200", "name": "Gadget"}))
+	tree.InsertRowWithID("root/mydb/products", "p3", models.NewRow(map[string]interface{}{"product_id": "300", "name": "Doohickey"}))
+
+	// Insert sold products (only 100 and 300)
+	tree.InsertRowWithID("root/mydb/sold_products", "sp1", models.NewRow(map[string]interface{}{"product_id": "100"}))
+	tree.InsertRowWithID("root/mydb/sold_products", "sp2", models.NewRow(map[string]interface{}{"product_id": "300"}))
+
+	// Get products that have been sold
+	rowIDs, err := tree.InSubquery("root/mydb/products", "product_id", "root/mydb/sold_products", "product_id")
+	if err != nil {
+		t.Fatalf("InSubquery failed: %v", err)
+	}
+
+	if len(rowIDs) != 2 {
+		t.Errorf("Expected 2 products sold, got %d", len(rowIDs))
+	}
+
+	// Verify p1 and p3 are in results, p2 is not
+	hasP1, hasP2, hasP3 := false, false, false
+	for _, id := range rowIDs {
+		if id == "p1" {
+			hasP1 = true
+		}
+		if id == "p2" {
+			hasP2 = true
+		}
+		if id == "p3" {
+			hasP3 = true
+		}
+	}
+
+	if !hasP1 || !hasP3 {
+		t.Error("Expected p1 and p3 in results")
+	}
+
+	if hasP2 {
+		t.Error("p2 should NOT be in results")
+	}
+}
+

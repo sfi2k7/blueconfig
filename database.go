@@ -3046,3 +3046,773 @@ func (t *Tree) BulkUpsert(tablePath string, rows map[string]models.Row) (int, in
 
 	return insertCount, updateCount, nil
 }
+
+// ============================================================================
+// Range Query Operations
+// ============================================================================
+
+// FindRowsRange finds rows where an indexed field falls within a range.
+// Uses index for efficient lookup. startValue and endValue are inclusive.
+// Pass nil for startValue to search from beginning, nil for endValue to search to end.
+// Returns full rows (not just IDs).
+func (t *Tree) FindRowsRange(tablePath, indexName string, startValue, endValue interface{}) ([]models.Row, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	// Convert values to strings for comparison
+	startKey := ""
+	endKey := ""
+
+	if startValue != nil {
+		startKey = fmt.Sprintf("%v", startValue)
+	}
+
+	if endValue != nil {
+		endKey = fmt.Sprintf("%v", endValue)
+	}
+
+	// Use internal lookupIndexRange
+	rowIDs, err := t.lookupIndexRange(tablePath, indexName, startKey, endKey)
+	if err != nil {
+		return nil, fmt.Errorf("range lookup failed: %v", err)
+	}
+
+	// Load full rows
+	results := make([]models.Row, 0, len(rowIDs))
+	for _, rowID := range rowIDs {
+		row, err := t.GetRow(tablePath, rowID)
+		if err != nil {
+			continue
+		}
+		results = append(results, row)
+	}
+
+	return results, nil
+}
+
+// FindRowIDsRange finds row IDs where an indexed field falls within a range.
+// More memory-efficient than FindRowsRange when you only need IDs.
+// Returns row IDs only (not full rows).
+func (t *Tree) FindRowIDsRange(tablePath, indexName string, startValue, endValue interface{}) ([]string, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	// Convert values to strings for comparison
+	startKey := ""
+	endKey := ""
+
+	if startValue != nil {
+		startKey = fmt.Sprintf("%v", startValue)
+	}
+
+	if endValue != nil {
+		endKey = fmt.Sprintf("%v", endValue)
+	}
+
+	// Use internal lookupIndexRange
+	return t.lookupIndexRange(tablePath, indexName, startKey, endKey)
+}
+
+// FindRowsBetween is a convenience method for range queries with both bounds.
+// Equivalent to FindRowsRange with non-nil start and end values.
+func (t *Tree) FindRowsBetween(tablePath, indexName string, startValue, endValue interface{}) ([]models.Row, error) {
+	if startValue == nil || endValue == nil {
+		return nil, errors.New("both startValue and endValue must be non-nil for FindRowsBetween")
+	}
+	return t.FindRowsRange(tablePath, indexName, startValue, endValue)
+}
+
+// FindRowsGreaterThan finds rows where an indexed field is greater than a value.
+// Note: For numeric comparisons, this scans all index entries and filters by value.
+func (t *Tree) FindRowsGreaterThan(tablePath, indexName string, value interface{}) ([]models.Row, error) {
+	if value == nil {
+		return nil, errors.New("value cannot be nil")
+	}
+	// Get all rows from index (string comparison doesn't work for numeric values)
+	rowIDs, err := t.lookupIndexRange(tablePath, indexName, "", "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get index entries: %v", err)
+	}
+
+	// Get index info to determine field name
+	indexInfo, err := t.GetIndexInfo(tablePath, indexName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get index info: %v", err)
+	}
+	if len(indexInfo.Fields) == 0 {
+		return nil, errors.New("index has no fields")
+	}
+	fieldName := indexInfo.Fields[0] // Use first field for single-field comparison
+
+	// Load rows and filter by actual value comparison
+	results := make([]models.Row, 0)
+	compareVal := models.NewValue(value)
+	for _, rowID := range rowIDs {
+		row, err := t.GetRow(tablePath, rowID)
+		if err != nil {
+			continue
+		}
+		if rowVal, exists := row[fieldName]; exists && rowVal != nil {
+			if match, err := rowVal.Compare(compareVal, ">"); err == nil && match {
+				results = append(results, row)
+			}
+		}
+	}
+	return results, nil
+}
+
+// FindRowsLessThan finds rows where an indexed field is less than a value.
+func (t *Tree) FindRowsLessThan(tablePath, indexName string, value interface{}) ([]models.Row, error) {
+	if value == nil {
+		return nil, errors.New("value cannot be nil")
+	}
+	rowIDs, err := t.lookupIndexRange(tablePath, indexName, "", "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get index entries: %v", err)
+	}
+
+	indexInfo, err := t.GetIndexInfo(tablePath, indexName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get index info: %v", err)
+	}
+	if len(indexInfo.Fields) == 0 {
+		return nil, errors.New("index has no fields")
+	}
+	fieldName := indexInfo.Fields[0]
+
+	results := make([]models.Row, 0)
+	compareVal := models.NewValue(value)
+	for _, rowID := range rowIDs {
+		row, err := t.GetRow(tablePath, rowID)
+		if err != nil {
+			continue
+		}
+		if rowVal, exists := row[fieldName]; exists && rowVal != nil {
+			if match, err := rowVal.Compare(compareVal, "<"); err == nil && match {
+				results = append(results, row)
+			}
+		}
+	}
+	return results, nil
+}
+
+// FindRowsGreaterThanOrEqual finds rows where an indexed field is >= value.
+func (t *Tree) FindRowsGreaterThanOrEqual(tablePath, indexName string, value interface{}) ([]models.Row, error) {
+	if value == nil {
+		return nil, errors.New("value cannot be nil")
+	}
+	rowIDs, err := t.lookupIndexRange(tablePath, indexName, "", "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get index entries: %v", err)
+	}
+
+	indexInfo, err := t.GetIndexInfo(tablePath, indexName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get index info: %v", err)
+	}
+	if len(indexInfo.Fields) == 0 {
+		return nil, errors.New("index has no fields")
+	}
+	fieldName := indexInfo.Fields[0]
+
+	results := make([]models.Row, 0)
+	compareVal := models.NewValue(value)
+	for _, rowID := range rowIDs {
+		row, err := t.GetRow(tablePath, rowID)
+		if err != nil {
+			continue
+		}
+		if rowVal, exists := row[fieldName]; exists && rowVal != nil {
+			if match, err := rowVal.Compare(compareVal, ">="); err == nil && match {
+				results = append(results, row)
+			}
+		}
+	}
+	return results, nil
+}
+
+// FindRowsLessThanOrEqual finds rows where an indexed field is <= value.
+func (t *Tree) FindRowsLessThanOrEqual(tablePath, indexName string, value interface{}) ([]models.Row, error) {
+	if value == nil {
+		return nil, errors.New("value cannot be nil")
+	}
+	rowIDs, err := t.lookupIndexRange(tablePath, indexName, "", "")
+	if err != nil {
+		return nil, fmt.Errorf("failed to get index entries: %v", err)
+	}
+
+	indexInfo, err := t.GetIndexInfo(tablePath, indexName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get index info: %v", err)
+	}
+	if len(indexInfo.Fields) == 0 {
+		return nil, errors.New("index has no fields")
+	}
+	fieldName := indexInfo.Fields[0]
+
+	results := make([]models.Row, 0)
+	compareVal := models.NewValue(value)
+	for _, rowID := range rowIDs {
+		row, err := t.GetRow(tablePath, rowID)
+		if err != nil {
+			continue
+		}
+		if rowVal, exists := row[fieldName]; exists && rowVal != nil {
+			if match, err := rowVal.Compare(compareVal, "<="); err == nil && match {
+				results = append(results, row)
+			}
+		}
+	}
+	return results, nil
+}
+
+// ============================================================================
+// Distinct Value Operations
+// ============================================================================
+
+// GetDistinctValues returns unique values for a specific field across all rows.
+// Memory-efficient: loads only the specified field from each row.
+func (t *Tree) GetDistinctValues(tablePath, fieldName string) ([]interface{}, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	// Get all row IDs
+	rowIDs, err := t.GetRowIDsOnly(tablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get row IDs: %v", err)
+	}
+
+	// Use map to track unique values
+	uniqueValues := make(map[string]interface{})
+
+	for _, rowID := range rowIDs {
+		// Load only the specified field
+		fields, err := t.GetRowFields(tablePath, rowID, []string{fieldName})
+		if err != nil {
+			continue
+		}
+
+		if val, exists := fields[fieldName]; exists && val != nil {
+			// Use string representation as map key for uniqueness
+			key := fmt.Sprintf("%v", val.Val())
+			uniqueValues[key] = val.Val()
+		}
+	}
+
+	// Convert map to slice
+	result := make([]interface{}, 0, len(uniqueValues))
+	for _, val := range uniqueValues {
+		result = append(result, val)
+	}
+
+	return result, nil
+}
+
+// CountDistinct counts unique values for a specific field.
+// More memory-efficient than GetDistinctValues when you only need the count.
+func (t *Tree) CountDistinct(tablePath, fieldName string) (int, error) {
+	values, err := t.GetDistinctValues(tablePath, fieldName)
+	if err != nil {
+		return 0, err
+	}
+	return len(values), nil
+}
+
+// ============================================================================
+// Field-Level Atomic Operations
+// ============================================================================
+
+// IncrementField atomically increments a numeric field by a delta value.
+// Creates the field if it doesn't exist (starts from 0).
+func (t *Tree) IncrementField(tablePath, rowID, fieldName string, delta int64) (int64, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return 0, err
+	}
+
+	txn, err := t.BeginTransaction()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer txn.Rollback()
+
+	// Get current value
+	currentValue := int64(0)
+	fields, err := t.GetRowFields(tablePath, rowID, []string{fieldName})
+	if err == nil && fields[fieldName] != nil {
+		currentValue, _ = fields[fieldName].AsInt64()
+	}
+
+	// Calculate new value
+	newValue := currentValue + delta
+
+	// Update field
+	err = txn.UpdateRowFields(tablePath, rowID, map[string]interface{}{
+		fieldName: newValue,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("failed to update field: %v", err)
+	}
+
+	if err := txn.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit: %v", err)
+	}
+
+	return newValue, nil
+}
+
+// DecrementField atomically decrements a numeric field.
+func (t *Tree) DecrementField(tablePath, rowID, fieldName string, delta int64) (int64, error) {
+	return t.IncrementField(tablePath, rowID, fieldName, -delta)
+}
+
+// SetFieldIfNotExists sets a field value only if the field doesn't exist.
+// Returns (wasSet, error) where wasSet indicates if the value was set.
+func (t *Tree) SetFieldIfNotExists(tablePath, rowID, fieldName string, value interface{}) (bool, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return false, err
+	}
+
+	// Check if field exists with a non-zero value
+	fields, err := t.GetRowFields(tablePath, rowID, []string{fieldName})
+	if err == nil && fields[fieldName] != nil && !fields[fieldName].IsNull() && !fields[fieldName].IsZero() {
+		return false, nil // Field already exists with a non-zero value
+	}
+
+	// Set the field
+	err = t.UpdateRowFields(tablePath, rowID, map[string]interface{}{
+		fieldName: value,
+	})
+	if err != nil {
+		return false, fmt.Errorf("failed to set field: %v", err)
+	}
+
+	return true, nil
+}
+
+// ============================================================================
+// Join Operations
+// ============================================================================
+
+// JoinResult represents a joined row from two tables.
+type JoinResult struct {
+	LeftRow  models.Row
+	RightRow models.Row
+	LeftID   string
+	RightID  string
+}
+
+// InnerJoin performs an inner join between two tables on specified fields.
+// Returns only rows where the join condition matches in both tables.
+func (t *Tree) InnerJoin(leftTablePath, rightTablePath string, leftField, rightField string) ([]JoinResult, error) {
+	if err := t.ValidateTablePath(leftTablePath); err != nil {
+		return nil, fmt.Errorf("invalid left table: %v", err)
+	}
+	if err := t.ValidateTablePath(rightTablePath); err != nil {
+		return nil, fmt.Errorf("invalid right table: %v", err)
+	}
+
+	// Get all rows from left table
+	leftRowIDs, err := t.GetRowIDsOnly(leftTablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get left table rows: %v", err)
+	}
+
+	// Build index of right table by join field
+	rightIndex := make(map[string][]string) // field value -> list of row IDs
+	rightRowIDs, err := t.GetRowIDsOnly(rightTablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get right table rows: %v", err)
+	}
+
+	for _, rightID := range rightRowIDs {
+		fields, err := t.GetRowFields(rightTablePath, rightID, []string{rightField})
+		if err != nil || fields[rightField] == nil {
+			continue
+		}
+		key := fields[rightField].AsString()
+		rightIndex[key] = append(rightIndex[key], rightID)
+	}
+
+	// Perform join
+	results := make([]JoinResult, 0)
+	for _, leftID := range leftRowIDs {
+		leftRow, err := t.GetRow(leftTablePath, leftID)
+		if err != nil {
+			continue
+		}
+
+		leftVal, exists := leftRow[leftField]
+		if !exists || leftVal == nil {
+			continue
+		}
+
+		leftKey := leftVal.AsString()
+		rightIDs, found := rightIndex[leftKey]
+		if !found {
+			continue
+		}
+
+		// Create join result for each matching right row
+		for _, rightID := range rightIDs {
+			rightRow, err := t.GetRow(rightTablePath, rightID)
+			if err != nil {
+				continue
+			}
+
+			results = append(results, JoinResult{
+				LeftRow:  leftRow,
+				RightRow: rightRow,
+				LeftID:   leftID,
+				RightID:  rightID,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+// LeftJoin performs a left outer join between two tables on specified fields.
+// Returns all rows from the left table, with matching rows from the right table.
+// If no match is found, RightRow will be nil.
+func (t *Tree) LeftJoin(leftTablePath, rightTablePath string, leftField, rightField string) ([]JoinResult, error) {
+	if err := t.ValidateTablePath(leftTablePath); err != nil {
+		return nil, fmt.Errorf("invalid left table: %v", err)
+	}
+	if err := t.ValidateTablePath(rightTablePath); err != nil {
+		return nil, fmt.Errorf("invalid right table: %v", err)
+	}
+
+	// Get all rows from left table
+	leftRowIDs, err := t.GetRowIDsOnly(leftTablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get left table rows: %v", err)
+	}
+
+	// Build index of right table by join field
+	rightIndex := make(map[string][]string)
+	rightRowIDs, err := t.GetRowIDsOnly(rightTablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get right table rows: %v", err)
+	}
+
+	for _, rightID := range rightRowIDs {
+		fields, err := t.GetRowFields(rightTablePath, rightID, []string{rightField})
+		if err != nil || fields[rightField] == nil {
+			continue
+		}
+		key := fields[rightField].AsString()
+		rightIndex[key] = append(rightIndex[key], rightID)
+	}
+
+	// Perform left join
+	results := make([]JoinResult, 0)
+	for _, leftID := range leftRowIDs {
+		leftRow, err := t.GetRow(leftTablePath, leftID)
+		if err != nil {
+			continue
+		}
+
+		leftVal, exists := leftRow[leftField]
+		if !exists || leftVal == nil {
+			// No join key, include with nil right side
+			results = append(results, JoinResult{
+				LeftRow:  leftRow,
+				RightRow: nil,
+				LeftID:   leftID,
+				RightID:  "",
+			})
+			continue
+		}
+
+		leftKey := leftVal.AsString()
+		rightIDs, found := rightIndex[leftKey]
+		if !found {
+			// No match, include with nil right side
+			results = append(results, JoinResult{
+				LeftRow:  leftRow,
+				RightRow: nil,
+				LeftID:   leftID,
+				RightID:  "",
+			})
+			continue
+		}
+
+		// Create join result for each matching right row
+		for _, rightID := range rightIDs {
+			rightRow, err := t.GetRow(rightTablePath, rightID)
+			if err != nil {
+				continue
+			}
+
+			results = append(results, JoinResult{
+				LeftRow:  leftRow,
+				RightRow: rightRow,
+				LeftID:   leftID,
+				RightID:  rightID,
+			})
+		}
+	}
+
+	return results, nil
+}
+
+// ============================================================================
+// Aggregation Operations
+// ============================================================================
+
+// AggregateResult represents the result of an aggregation operation.
+type AggregateResult struct {
+	Count int
+	Sum   float64
+	Avg   float64
+	Min   interface{}
+	Max   interface{}
+}
+
+// Aggregate performs multiple aggregation operations on a field.
+func (t *Tree) Aggregate(tablePath, fieldName string) (*AggregateResult, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	rowIDs, err := t.GetRowIDsOnly(tablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get row IDs: %v", err)
+	}
+
+	result := &AggregateResult{Count: 0}
+	var values []float64
+	var firstValue interface{}
+	var minVal, maxVal float64
+	hasValues := false
+
+	for _, rowID := range rowIDs {
+		fields, err := t.GetRowFields(tablePath, rowID, []string{fieldName})
+		if err != nil || fields[fieldName] == nil || fields[fieldName].IsNull() {
+			continue
+		}
+
+		val := fields[fieldName]
+		floatVal, err := val.AsFloat64()
+		if err != nil {
+			continue // Skip non-numeric values
+		}
+
+		values = append(values, floatVal)
+		result.Sum += floatVal
+		result.Count++
+
+		if !hasValues {
+			minVal = floatVal
+			maxVal = floatVal
+			firstValue = val.Val()
+			hasValues = true
+		} else {
+			if floatVal < minVal {
+				minVal = floatVal
+				result.Min = val.Val()
+			}
+			if floatVal > maxVal {
+				maxVal = floatVal
+				result.Max = val.Val()
+			}
+		}
+	}
+
+	if result.Count > 0 {
+		result.Avg = result.Sum / float64(result.Count)
+		if result.Min == nil {
+			result.Min = firstValue
+		}
+		if result.Max == nil {
+			result.Max = maxVal
+		}
+	}
+
+	return result, nil
+}
+
+// Sum calculates the sum of a numeric field across all rows.
+func (t *Tree) Sum(tablePath, fieldName string) (float64, error) {
+	agg, err := t.Aggregate(tablePath, fieldName)
+	if err != nil {
+		return 0, err
+	}
+	return agg.Sum, nil
+}
+
+// Avg calculates the average of a numeric field across all rows.
+func (t *Tree) Avg(tablePath, fieldName string) (float64, error) {
+	agg, err := t.Aggregate(tablePath, fieldName)
+	if err != nil {
+		return 0, err
+	}
+	return agg.Avg, nil
+}
+
+// Min finds the minimum value of a field across all rows.
+func (t *Tree) Min(tablePath, fieldName string) (interface{}, error) {
+	agg, err := t.Aggregate(tablePath, fieldName)
+	if err != nil {
+		return nil, err
+	}
+	return agg.Min, nil
+}
+
+// Max finds the maximum value of a field across all rows.
+func (t *Tree) Max(tablePath, fieldName string) (interface{}, error) {
+	agg, err := t.Aggregate(tablePath, fieldName)
+	if err != nil {
+		return nil, err
+	}
+	return agg.Max, nil
+}
+
+// GroupByResult represents aggregated data for a single group.
+type GroupByResult struct {
+	GroupValue interface{}
+	Count      int
+	Sum        float64
+	Avg        float64
+	Min        interface{}
+	Max        interface{}
+	RowIDs     []string
+}
+
+// GroupBy groups rows by a field and performs aggregations on another field.
+func (t *Tree) GroupBy(tablePath, groupByField, aggregateField string) (map[string]*GroupByResult, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	rowIDs, err := t.GetRowIDsOnly(tablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get row IDs: %v", err)
+	}
+
+	groups := make(map[string]*GroupByResult)
+
+	for _, rowID := range rowIDs {
+		fields, err := t.GetRowFields(tablePath, rowID, []string{groupByField, aggregateField})
+		if err != nil {
+			continue
+		}
+
+		groupVal, exists := fields[groupByField]
+		if !exists || groupVal == nil || groupVal.IsNull() {
+			continue
+		}
+
+		groupKey := groupVal.AsString()
+		group, exists := groups[groupKey]
+		if !exists {
+			group = &GroupByResult{
+				GroupValue: groupVal.Val(),
+				RowIDs:     make([]string, 0),
+			}
+			groups[groupKey] = group
+		}
+
+		group.RowIDs = append(group.RowIDs, rowID)
+		group.Count++
+
+		// Aggregate numeric field if present
+		if aggVal, ok := fields[aggregateField]; ok && aggVal != nil && !aggVal.IsNull() {
+			floatVal, err := aggVal.AsFloat64()
+			if err == nil {
+				group.Sum += floatVal
+
+				if group.Count == 1 {
+					group.Min = aggVal.Val()
+					group.Max = aggVal.Val()
+				} else {
+					if minFloat, _ := models.NewValue(group.Min).AsFloat64(); floatVal < minFloat {
+						group.Min = aggVal.Val()
+					}
+					if maxFloat, _ := models.NewValue(group.Max).AsFloat64(); floatVal > maxFloat {
+						group.Max = aggVal.Val()
+					}
+				}
+			}
+		}
+	}
+
+	// Calculate averages
+	for _, group := range groups {
+		if group.Count > 0 {
+			group.Avg = group.Sum / float64(group.Count)
+		}
+	}
+
+	return groups, nil
+}
+
+// ============================================================================
+// Subquery Support
+// ============================================================================
+
+// ExistsInSubquery checks if any row in the subquery table matches the condition.
+// The condition is: subqueryField == valueFromMainRow[mainField]
+func (t *Tree) ExistsInSubquery(mainTablePath, mainField, subqueryTablePath, subqueryField string) (map[string]bool, error) {
+	if err := t.ValidateTablePath(mainTablePath); err != nil {
+		return nil, fmt.Errorf("invalid main table: %v", err)
+	}
+	if err := t.ValidateTablePath(subqueryTablePath); err != nil {
+		return nil, fmt.Errorf("invalid subquery table: %v", err)
+	}
+
+	// Build set of values from subquery table
+	subqueryValues := make(map[string]bool)
+	subRowIDs, err := t.GetRowIDsOnly(subqueryTablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get subquery rows: %v", err)
+	}
+
+	for _, rowID := range subRowIDs {
+		fields, err := t.GetRowFields(subqueryTablePath, rowID, []string{subqueryField})
+		if err != nil || fields[subqueryField] == nil {
+			continue
+		}
+		subqueryValues[fields[subqueryField].AsString()] = true
+	}
+
+	// Check main table rows
+	mainRowIDs, err := t.GetRowIDsOnly(mainTablePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get main table rows: %v", err)
+	}
+
+	results := make(map[string]bool)
+	for _, rowID := range mainRowIDs {
+		fields, err := t.GetRowFields(mainTablePath, rowID, []string{mainField})
+		if err != nil || fields[mainField] == nil {
+			results[rowID] = false
+			continue
+		}
+
+		mainValue := fields[mainField].AsString()
+		results[rowID] = subqueryValues[mainValue]
+	}
+
+	return results, nil
+}
+
+// InSubquery returns row IDs from main table where mainField value exists in subquery results.
+func (t *Tree) InSubquery(mainTablePath, mainField, subqueryTablePath, subqueryField string) ([]string, error) {
+	existsMap, err := t.ExistsInSubquery(mainTablePath, mainField, subqueryTablePath, subqueryField)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]string, 0)
+	for rowID, exists := range existsMap {
+		if exists {
+			results = append(results, rowID)
+		}
+	}
+
+	return results, nil
+}
