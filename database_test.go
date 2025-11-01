@@ -1471,3 +1471,579 @@ func TestConcurrentSchemaUpdates(t *testing.T) {
 		t.Errorf("Expected at least 6 fields, got %d", len(schema.Fields))
 	}
 }
+
+// ============================================================================
+// Row/Record CRUD Tests
+// ============================================================================
+
+func TestInsertRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup database and table
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Create a row
+	row := models.NewRow(map[string]interface{}{
+		"name":  "John Doe",
+		"age":   30,
+		"email": "john@example.com",
+	})
+
+	// Insert the row
+	rowID, err := tree.InsertRow("root/mydb/users", row)
+	if err != nil {
+		t.Fatalf("Failed to insert row: %v", err)
+	}
+
+	if rowID == "" {
+		t.Error("Expected non-empty row ID")
+	}
+
+	// Verify row count
+	count, _ := tree.GetRowCount("root/mydb/users")
+	if count != 1 {
+		t.Errorf("Expected row count 1, got %d", count)
+	}
+
+	// Verify schema was created
+	schema, _ := tree.GetTableSchema("root/mydb/users")
+	if schema == nil {
+		t.Error("Expected schema to be created")
+	}
+
+	if len(schema.Fields) != 3 {
+		t.Errorf("Expected 3 fields in schema, got %d", len(schema.Fields))
+	}
+}
+
+func TestInsertRowWithID(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	row := models.NewRow(map[string]interface{}{
+		"name": "Jane Doe",
+		"age":  25,
+	})
+
+	// Insert with custom ID
+	err := tree.InsertRowWithID("root/mydb/users", "user_123", row)
+	if err != nil {
+		t.Fatalf("Failed to insert row with ID: %v", err)
+	}
+
+	// Verify row exists
+	exists, _ := tree.RowExists("root/mydb/users", "user_123")
+	if !exists {
+		t.Error("Expected row to exist")
+	}
+
+	// Try to insert duplicate ID
+	err = tree.InsertRowWithID("root/mydb/users", "user_123", row)
+	if err == nil {
+		t.Error("Expected error when inserting duplicate row ID")
+	}
+}
+
+func TestGetRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert a row
+	originalRow := models.NewRow(map[string]interface{}{
+		"name":  "Alice",
+		"age":   28,
+		"email": "alice@example.com",
+	})
+
+	rowID, _ := tree.InsertRow("root/mydb/users", originalRow)
+
+	// Get the row
+	retrievedRow, err := tree.GetRow("root/mydb/users", rowID)
+	if err != nil {
+		t.Fatalf("Failed to get row: %v", err)
+	}
+
+	// Verify fields
+	if nameVal, ok := retrievedRow["name"]; ok {
+		nameStr := nameVal.AsString()
+		if nameStr != "Alice" {
+			t.Errorf("Expected name 'Alice', got %v", nameStr)
+		}
+	} else {
+		t.Error("Expected 'name' field to exist")
+	}
+
+	if ageVal, ok := retrievedRow["age"]; ok {
+		ageStr := ageVal.AsString()
+		if ageStr != "28" {
+			t.Errorf("Expected age '28', got %v", ageStr)
+		}
+	} else {
+		t.Error("Expected 'age' field to exist")
+	}
+}
+
+func TestGetRowNotFound(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Try to get non-existent row
+	_, err := tree.GetRow("root/mydb/users", "nonexistent")
+	if err == nil {
+		t.Error("Expected error when getting non-existent row")
+	}
+}
+
+func TestUpdateRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial row
+	originalRow := models.NewRow(map[string]interface{}{
+		"name": "Bob",
+		"age":  30,
+	})
+
+	rowID, _ := tree.InsertRow("root/mydb/users", originalRow)
+
+	// Update the row
+	updatedRow := models.NewRow(map[string]interface{}{
+		"name":  "Bob Smith",
+		"age":   31,
+		"email": "bob@example.com",
+	})
+
+	err := tree.UpdateRow("root/mydb/users", rowID, updatedRow)
+	if err != nil {
+		t.Fatalf("Failed to update row: %v", err)
+	}
+
+	// Verify update
+	retrievedRow, _ := tree.GetRow("root/mydb/users", rowID)
+
+	if nameVal, ok := retrievedRow["name"]; ok {
+		if nameVal.AsString() != "Bob Smith" {
+			t.Errorf("Expected updated name, got %v", nameVal.AsString())
+		}
+	}
+
+	if emailVal, ok := retrievedRow["email"]; ok {
+		if emailVal.AsString() != "bob@example.com" {
+			t.Errorf("Expected email field, got %v", emailVal.AsString())
+		}
+	}
+}
+
+func TestUpdateRowFields(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial row
+	originalRow := models.NewRow(map[string]interface{}{
+		"name": "Charlie",
+		"age":  25,
+		"city": "NYC",
+	})
+
+	rowID, _ := tree.InsertRow("root/mydb/users", originalRow)
+
+	// Partial update - only age
+	err := tree.UpdateRowFields("root/mydb/users", rowID, map[string]interface{}{
+		"age": 26,
+	})
+	if err != nil {
+		t.Fatalf("Failed to update row fields: %v", err)
+	}
+
+	// Verify partial update
+	retrievedRow, _ := tree.GetRow("root/mydb/users", rowID)
+
+	if ageVal, ok := retrievedRow["age"]; ok {
+		if ageVal.AsString() != "26" {
+			t.Errorf("Expected age 26, got %v", ageVal.AsString())
+		}
+	}
+
+	// Name and city should remain unchanged
+	if nameVal, ok := retrievedRow["name"]; ok {
+		if nameVal.AsString() != "Charlie" {
+			t.Errorf("Expected name unchanged, got %v", nameVal.AsString())
+		}
+	}
+}
+
+func TestDeleteRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert row
+	row := models.NewRow(map[string]interface{}{
+		"name": "Dave",
+	})
+
+	rowID, _ := tree.InsertRow("root/mydb/users", row)
+
+	// Verify row count before delete
+	countBefore, _ := tree.GetRowCount("root/mydb/users")
+	if countBefore != 1 {
+		t.Errorf("Expected count 1 before delete, got %d", countBefore)
+	}
+
+	// Delete row
+	err := tree.DeleteRow("root/mydb/users", rowID)
+	if err != nil {
+		t.Fatalf("Failed to delete row: %v", err)
+	}
+
+	// Verify row count after delete
+	countAfter, _ := tree.GetRowCount("root/mydb/users")
+	if countAfter != 0 {
+		t.Errorf("Expected count 0 after delete, got %d", countAfter)
+	}
+
+	// Verify row doesn't exist
+	exists, _ := tree.RowExists("root/mydb/users", rowID)
+	if exists {
+		t.Error("Expected row to not exist after deletion")
+	}
+}
+
+func TestListRows(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert multiple rows
+	for i := 0; i < 5; i++ {
+		row := models.NewRow(map[string]interface{}{
+			"id":   i,
+			"name": fmt.Sprintf("User %d", i),
+		})
+		tree.InsertRow("root/mydb/users", row)
+	}
+
+	// List all rows
+	rowIDs, err := tree.ListRows("root/mydb/users")
+	if err != nil {
+		t.Fatalf("Failed to list rows: %v", err)
+	}
+
+	if len(rowIDs) != 5 {
+		t.Errorf("Expected 5 rows, got %d", len(rowIDs))
+	}
+}
+
+func TestGetAllRows(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "products")
+
+	// Insert multiple rows
+	expectedNames := []string{"Product A", "Product B", "Product C"}
+	for _, name := range expectedNames {
+		row := models.NewRow(map[string]interface{}{
+			"name":  name,
+			"price": 99.99,
+		})
+		tree.InsertRow("root/mydb/products", row)
+	}
+
+	// Get all rows
+	allRows, err := tree.GetAllRows("root/mydb/products")
+	if err != nil {
+		t.Fatalf("Failed to get all rows: %v", err)
+	}
+
+	if len(allRows) != 3 {
+		t.Errorf("Expected 3 rows, got %d", len(allRows))
+	}
+
+	// Verify each row has expected fields
+	for _, row := range allRows {
+		if _, ok := row["name"]; !ok {
+			t.Error("Expected 'name' field in row")
+		}
+		if _, ok := row["price"]; !ok {
+			t.Error("Expected 'price' field in row")
+		}
+	}
+}
+
+func TestScanRows(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "items")
+
+	// Insert rows
+	for i := 0; i < 3; i++ {
+		row := models.NewRow(map[string]interface{}{
+			"id":   i,
+			"name": fmt.Sprintf("Item %d", i),
+		})
+		tree.InsertRow("root/mydb/items", row)
+	}
+
+	// Scan rows
+	count := 0
+	err := tree.ScanRows("root/mydb/items", func(rowID string, row models.Row) error {
+		count++
+
+		// Verify row has expected fields
+		if _, ok := row["id"]; !ok {
+			t.Error("Expected 'id' field in row")
+		}
+		if _, ok := row["name"]; !ok {
+			t.Error("Expected 'name' field in row")
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		t.Fatalf("Failed to scan rows: %v", err)
+	}
+
+	if count != 3 {
+		t.Errorf("Expected to scan 3 rows, scanned %d", count)
+	}
+}
+
+func TestCountRows(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "logs")
+
+	// Insert rows
+	for i := 0; i < 10; i++ {
+		row := models.NewRow(map[string]interface{}{
+			"message": fmt.Sprintf("Log entry %d", i),
+		})
+		tree.InsertRow("root/mydb/logs", row)
+	}
+
+	// Count rows
+	count, err := tree.CountRows("root/mydb/logs")
+	if err != nil {
+		t.Fatalf("Failed to count rows: %v", err)
+	}
+
+	if count != 10 {
+		t.Errorf("Expected count 10, got %d", count)
+	}
+}
+
+func TestRowExists(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert row with known ID
+	row := models.NewRow(map[string]interface{}{
+		"name": "Test User",
+	})
+	tree.InsertRowWithID("root/mydb/users", "known_id", row)
+
+	// Check existence
+	exists, _ := tree.RowExists("root/mydb/users", "known_id")
+	if !exists {
+		t.Error("Expected row to exist")
+	}
+
+	notExists, _ := tree.RowExists("root/mydb/users", "unknown_id")
+	if notExists {
+		t.Error("Expected row to not exist")
+	}
+}
+
+func TestInsertRowInvalidTable(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	// Don't create table
+
+	row := models.NewRow(map[string]interface{}{
+		"name": "Test",
+	})
+
+	// Try to insert in non-existent table
+	_, err := tree.InsertRow("root/mydb/nonexistent", row)
+	if err == nil {
+		t.Error("Expected error when inserting into non-existent table")
+	}
+}
+
+func TestUpdateRowNotFound(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	row := models.NewRow(map[string]interface{}{
+		"name": "Test",
+	})
+
+	// Try to update non-existent row
+	err := tree.UpdateRow("root/mydb/users", "nonexistent", row)
+	if err == nil {
+		t.Error("Expected error when updating non-existent row")
+	}
+}
+
+func TestDeleteRowNotFound(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Try to delete non-existent row
+	err := tree.DeleteRow("root/mydb/users", "nonexistent")
+	if err == nil {
+		t.Error("Expected error when deleting non-existent row")
+	}
+}
+
+func TestRowCRUDWithSchemaEvolution(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert first row with basic fields
+	row1 := models.NewRow(map[string]interface{}{
+		"name": "User 1",
+		"age":  25,
+	})
+	tree.InsertRow("root/mydb/users", row1)
+
+	// Verify schema version 1
+	schema1, _ := tree.GetTableSchema("root/mydb/users")
+	if schema1.Version != 1 {
+		t.Errorf("Expected schema version 1, got %d", schema1.Version)
+	}
+
+	// Insert second row with additional field
+	row2 := models.NewRow(map[string]interface{}{
+		"name":  "User 2",
+		"age":   30,
+		"email": "user2@example.com",
+	})
+	tree.InsertRow("root/mydb/users", row2)
+
+	// Verify schema evolved to version 2
+	schema2, _ := tree.GetTableSchema("root/mydb/users")
+	if schema2.Version != 2 {
+		t.Errorf("Expected schema version 2, got %d", schema2.Version)
+	}
+
+	// Verify schema has 3 fields
+	if len(schema2.Fields) != 3 {
+		t.Errorf("Expected 3 fields, got %d", len(schema2.Fields))
+	}
+}
+
+func TestConcurrentRowInserts(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	done := make(chan bool)
+	numGoroutines := 20
+
+	// Concurrent inserts
+	for i := 0; i < numGoroutines; i++ {
+		go func(id int) {
+			row := models.NewRow(map[string]interface{}{
+				"id":   id,
+				"name": fmt.Sprintf("User %d", id),
+			})
+			tree.InsertRow("root/mydb/users", row)
+			done <- true
+		}(i)
+	}
+
+	// Wait for all goroutines
+	for i := 0; i < numGoroutines; i++ {
+		<-done
+	}
+
+	// Verify all rows inserted
+	count, _ := tree.CountRows("root/mydb/users")
+	if count != numGoroutines {
+		t.Errorf("Expected %d rows, got %d", numGoroutines, count)
+	}
+}
+
+func TestBulkOperations(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "bulk_test")
+
+	// Bulk insert
+	numRows := 100
+	rowIDs := make([]string, numRows)
+
+	for i := 0; i < numRows; i++ {
+		row := models.NewRow(map[string]interface{}{
+			"index": i,
+			"data":  fmt.Sprintf("Data %d", i),
+		})
+		rowID, _ := tree.InsertRow("root/mydb/bulk_test", row)
+		rowIDs[i] = rowID
+	}
+
+	// Verify count
+	count, _ := tree.CountRows("root/mydb/bulk_test")
+	if count != numRows {
+		t.Errorf("Expected %d rows, got %d", numRows, count)
+	}
+
+	// Bulk delete (delete every other row)
+	for i := 0; i < numRows; i += 2 {
+		tree.DeleteRow("root/mydb/bulk_test", rowIDs[i])
+	}
+
+	// Verify count after deletion
+	countAfter, _ := tree.CountRows("root/mydb/bulk_test")
+	expected := numRows / 2
+	if countAfter != expected {
+		t.Errorf("Expected %d rows after deletion, got %d", expected, countAfter)
+	}
+}

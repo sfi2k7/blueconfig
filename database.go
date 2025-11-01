@@ -784,3 +784,374 @@ func (t *Tree) schemaHasNewFields(existing, new *TableSchema) bool {
 	}
 	return false
 }
+
+// ============================================================================
+// Row/Record CRUD Operations
+// ============================================================================
+
+// InsertRow inserts a new row into a table with automatic schema evolution
+// Returns the generated row ID
+func (t *Tree) InsertRow(tablePath string, row models.Row) (string, error) {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return "", err
+	}
+
+	// Generate unique row ID
+	rowID := t.GenerateRowID()
+	rowPath := tablePath + "/" + rowID
+
+	// Update schema with new row (adds new fields if any)
+	_, err := t.UpdateSchemaWithNewRow(tablePath, row)
+	if err != nil {
+		return "", fmt.Errorf("failed to update schema: %v", err)
+	}
+
+	// Validate row against schema
+	schema, _ := t.GetTableSchema(tablePath)
+	if err := t.ValidateRowAgainstSchema(row, schema); err != nil {
+		return "", fmt.Errorf("row validation failed: %v", err)
+	}
+
+	// Convert Row to map[string]interface{} for storage
+	rowData := make(map[string]interface{})
+	for key, val := range row {
+		rowData[key] = val.Val()
+	}
+
+	// Store the row
+	err = t.CreateNodeWithProps(rowPath, rowData)
+	if err != nil {
+		return "", fmt.Errorf("failed to store row: %v", err)
+	}
+
+	// Increment row count
+	if err := t.IncrementRowCount(tablePath); err != nil {
+		return "", fmt.Errorf("failed to update row count: %v", err)
+	}
+
+	return rowID, nil
+}
+
+// InsertRowWithID inserts a row with a specific ID (useful for imports or when ID is predetermined)
+func (t *Tree) InsertRowWithID(tablePath, rowID string, row models.Row) error {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	rowPath := tablePath + "/" + rowID
+
+	// Check if row already exists
+	children, err := t.GetNodesInPath(tablePath)
+	if err == nil {
+		for _, child := range children {
+			if child == rowID {
+				return fmt.Errorf("row with ID %s already exists", rowID)
+			}
+		}
+	}
+
+	// Update schema with new row
+	_, err = t.UpdateSchemaWithNewRow(tablePath, row)
+	if err != nil {
+		return fmt.Errorf("failed to update schema: %v", err)
+	}
+
+	// Validate row against schema
+	schema, _ := t.GetTableSchema(tablePath)
+	if err := t.ValidateRowAgainstSchema(row, schema); err != nil {
+		return fmt.Errorf("row validation failed: %v", err)
+	}
+
+	// Convert Row to map[string]interface{}
+	rowData := make(map[string]interface{})
+	for key, val := range row {
+		rowData[key] = val.Val()
+	}
+
+	// Store the row
+	err = t.CreateNodeWithProps(rowPath, rowData)
+	if err != nil {
+		return fmt.Errorf("failed to store row: %v", err)
+	}
+
+	// Increment row count
+	if err := t.IncrementRowCount(tablePath); err != nil {
+		return fmt.Errorf("failed to update row count: %v", err)
+	}
+
+	return nil
+}
+
+// GetRow retrieves a row by ID
+func (t *Tree) GetRow(tablePath, rowID string) (models.Row, error) {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	rowPath := tablePath + "/" + rowID
+
+	// Get all properties of the row
+	props, err := t.GetAllPropsWithValues(rowPath)
+	if err != nil {
+		return nil, fmt.Errorf("row not found: %v", err)
+	}
+
+	// Get table schema for type information
+	schema, _ := t.GetTableSchema(tablePath)
+
+	// Convert to Row
+	row := make(models.Row)
+	for key, value := range props {
+		rowVal := models.NewValue(value)
+
+		// Set schema type if available
+		if schema != nil {
+			if schemaType, exists := schema.Fields[key]; exists {
+				rowVal.SetSchemaType(schemaType)
+			}
+		}
+
+		row[key] = rowVal
+	}
+
+	return row, nil
+}
+
+// UpdateRow updates an existing row (replaces all fields)
+func (t *Tree) UpdateRow(tablePath, rowID string, row models.Row) error {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	rowPath := tablePath + "/" + rowID
+
+	// Check if row exists
+	_, err := t.GetNodesInPath(rowPath)
+	if err != nil {
+		return fmt.Errorf("row not found: %s", rowID)
+	}
+
+	// Update schema with new row (in case new fields are added)
+	_, err = t.UpdateSchemaWithNewRow(tablePath, row)
+	if err != nil {
+		return fmt.Errorf("failed to update schema: %v", err)
+	}
+
+	// Validate row against schema
+	schema, _ := t.GetTableSchema(tablePath)
+	if err := t.ValidateRowAgainstSchema(row, schema); err != nil {
+		return fmt.Errorf("row validation failed: %v", err)
+	}
+
+	// Convert Row to map[string]interface{}
+	rowData := make(map[string]interface{})
+	for key, val := range row {
+		rowData[key] = val.Val()
+	}
+
+	// Update all properties (this will overwrite existing values)
+	err = t.SetValues(rowPath, rowData)
+	if err != nil {
+		return fmt.Errorf("failed to update row: %v", err)
+	}
+
+	// Update last updated timestamp
+	now := strconv.FormatInt(time.Now().Unix(), 10)
+	t.SetValue(tablePath+"/__lastupdated", now)
+
+	return nil
+}
+
+// UpdateRowFields updates specific fields in a row (partial update)
+func (t *Tree) UpdateRowFields(tablePath, rowID string, fields map[string]interface{}) error {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	rowPath := tablePath + "/" + rowID
+
+	// Check if row exists
+	_, err := t.GetNodesInPath(rowPath)
+	if err != nil {
+		return fmt.Errorf("row not found: %s", rowID)
+	}
+
+	// Create a Row from the fields for schema validation
+	row := make(models.Row)
+	for key, val := range fields {
+		row[key] = models.NewValue(val)
+	}
+
+	// Update schema if needed
+	_, err = t.UpdateSchemaWithNewRow(tablePath, row)
+	if err != nil {
+		return fmt.Errorf("failed to update schema: %v", err)
+	}
+
+	// Update the fields
+	err = t.SetValues(rowPath, fields)
+	if err != nil {
+		return fmt.Errorf("failed to update fields: %v", err)
+	}
+
+	// Update last updated timestamp
+	now := strconv.FormatInt(time.Now().Unix(), 10)
+	t.SetValue(tablePath+"/__lastupdated", now)
+
+	return nil
+}
+
+// DeleteRow deletes a row from a table
+func (t *Tree) DeleteRow(tablePath, rowID string) error {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	rowPath := tablePath + "/" + rowID
+
+	// Delete the row node
+	err := t.DeleteNode(rowPath, true)
+	if err != nil {
+		return fmt.Errorf("failed to delete row: %v", err)
+	}
+
+	// Decrement row count
+	if err := t.DecrementRowCount(tablePath); err != nil {
+		return fmt.Errorf("failed to update row count: %v", err)
+	}
+
+	return nil
+}
+
+// ListRows returns all row IDs in a table
+func (t *Tree) ListRows(tablePath string) ([]string, error) {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	children, err := t.GetNodesInPath(tablePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter out special nodes (metadata)
+	var rows []string
+	for _, child := range children {
+		if !t.isSpecialNode(child) {
+			rows = append(rows, child)
+		}
+	}
+
+	return rows, nil
+}
+
+// GetAllRows retrieves all rows in a table
+func (t *Tree) GetAllRows(tablePath string) (map[string]models.Row, error) {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	// Get all row IDs
+	rowIDs, err := t.ListRows(tablePath)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get table schema once for all rows
+	schema, _ := t.GetTableSchema(tablePath)
+
+	// Retrieve each row
+	result := make(map[string]models.Row)
+	for _, rowID := range rowIDs {
+		rowPath := tablePath + "/" + rowID
+
+		props, err := t.GetAllPropsWithValues(rowPath)
+		if err != nil {
+			continue // Skip rows that can't be read
+		}
+
+		// Convert to Row
+		row := make(models.Row)
+		for key, value := range props {
+			rowVal := models.NewValue(value)
+
+			// Set schema type if available
+			if schema != nil {
+				if schemaType, exists := schema.Fields[key]; exists {
+					rowVal.SetSchemaType(schemaType)
+				}
+			}
+
+			row[key] = rowVal
+		}
+
+		result[rowID] = row
+	}
+
+	return result, nil
+}
+
+// ScanRows scans all rows in a table and calls the callback for each row
+// This is more memory-efficient than GetAllRows for large tables
+func (t *Tree) ScanRows(tablePath string, callback func(rowID string, row models.Row) error) error {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	// Get table schema once
+	schema, _ := t.GetTableSchema(tablePath)
+
+	// Use ScanNodes to iterate through child nodes
+	return t.ScanNodes(tablePath, func(nodeInfo NodeInfo) error {
+		// Skip special metadata nodes
+		if t.isSpecialNode(nodeInfo.Name) {
+			return nil
+		}
+
+		// Convert props to Row
+		row := make(models.Row)
+		for key, value := range nodeInfo.Props {
+			rowVal := models.NewValue(value)
+
+			// Set schema type if available
+			if schema != nil {
+				if schemaType, exists := schema.Fields[key]; exists {
+					rowVal.SetSchemaType(schemaType)
+				}
+			}
+
+			row[key] = rowVal
+		}
+
+		// Call the callback with row ID and row data
+		return callback(nodeInfo.Name, row)
+	})
+}
+
+// CountRows returns the number of rows in a table (using the metadata counter)
+func (t *Tree) CountRows(tablePath string) (int, error) {
+	return t.GetRowCount(tablePath)
+}
+
+// RowExists checks if a row with the given ID exists in a table
+func (t *Tree) RowExists(tablePath, rowID string) (bool, error) {
+	rowPath := tablePath + "/" + rowID
+
+	// Try to get nodes in the row path
+	_, err := t.GetNodesInPath(rowPath)
+	if err != nil {
+		// If error getting nodes, row doesn't exist or there's another issue
+		return false, nil
+	}
+
+	return true, nil
+}
