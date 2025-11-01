@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sfi2k7/blueconfig/models"
+	"github.com/sfi2k7/blueconfig/parser"
 )
 
 // ============================================================================
@@ -2991,5 +2992,440 @@ func TestCreateRowCursorsWithFields(t *testing.T) {
 		if _, exists := cursor.Fields["name"]; !exists {
 			t.Error("Expected 'name' field in cursor")
 		}
+	}
+}
+
+// ============================================================================
+// Query Planner and Execution Tests
+// ============================================================================
+
+func TestFindRowsBasic(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Alice"),
+		"age":  models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name": models.NewValue("Bob"),
+		"age":  models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"name": models.NewValue("Charlie"),
+		"age":  models.NewValue(35),
+	})
+
+	// Find rows with age > 26
+	rows, err := tree.FindRows("root/mydb/users", "age > 26", nil)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	// Should return Alice (30) and Charlie (35)
+	if len(rows) != 2 {
+		t.Errorf("Expected 2 rows, got %d", len(rows))
+	}
+}
+
+func TestFindRowsWithIndex(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Alice"),
+		"city": models.NewValue("NYC"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name": models.NewValue("Bob"),
+		"city": models.NewValue("LA"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"name": models.NewValue("Charlie"),
+		"city": models.NewValue("NYC"),
+	})
+
+	// Create index on city
+	tree.CreateIndex("root/mydb/users", "idx_city", []string{"city"}, false)
+
+	// Find rows with city == "NYC" (should use index)
+	rows, err := tree.FindRows("root/mydb/users", `city == "NYC"`, nil)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	// Should return Alice and Charlie
+	if len(rows) != 2 {
+		t.Errorf("Expected 2 rows, got %d", len(rows))
+	}
+
+	// Verify the query used index scan
+	plan, _ := tree.AnalyzeQuery("root/mydb/users", parser.ParseExprQuery(`city == "NYC"`))
+	if plan.Strategy != StrategyIndexScan {
+		t.Error("Expected index scan strategy")
+	}
+}
+
+func TestFindRowsWithLimit(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert 10 rows
+	for i := 0; i < 10; i++ {
+		tree.InsertRowWithID("root/mydb/users", fmt.Sprintf("user%d", i), models.Row{
+			"idx": models.NewValue(i),
+		})
+	}
+
+	// Find rows with limit of 5
+	opts := &QueryOptions{Limit: 5}
+	rows, err := tree.FindRows("root/mydb/users", "idx >= 0", opts)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	if len(rows) != 5 {
+		t.Errorf("Expected 5 rows due to limit, got %d", len(rows))
+	}
+}
+
+func TestFindRowsWithSkip(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert 10 rows
+	for i := 0; i < 10; i++ {
+		tree.InsertRowWithID("root/mydb/users", fmt.Sprintf("user%02d", i), models.Row{
+			"idx": models.NewValue(i),
+		})
+	}
+
+	// Find rows with skip of 3
+	opts := &QueryOptions{Skip: 3, Limit: 5}
+	rows, err := tree.FindRows("root/mydb/users", "idx >= 0", opts)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	// Should return 5 rows starting from position 3
+	if len(rows) != 5 {
+		t.Errorf("Expected 5 rows, got %d", len(rows))
+	}
+}
+
+func TestFindRowsWithSorting(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert unsorted data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Charlie"),
+		"age":  models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name": models.NewValue("Alice"),
+		"age":  models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"name": models.NewValue("Bob"),
+		"age":  models.NewValue(35),
+	})
+
+	// Find rows sorted by name
+	opts := &QueryOptions{
+		SortFields: []SortField{{FieldName: "name", Direction: SortAsc}},
+	}
+	rows, err := tree.FindRows("root/mydb/users", "age > 0", opts)
+	if err != nil {
+		t.Fatalf("FindRows failed: %v", err)
+	}
+
+	// Should be sorted: Alice, Bob, Charlie
+	if len(rows) != 3 {
+		t.Errorf("Expected 3 rows, got %d", len(rows))
+	}
+
+	if rows[0]["name"].AsString() != "Alice" {
+		t.Errorf("Expected first row to be Alice, got %s", rows[0]["name"].AsString())
+	}
+}
+
+func TestCountWhere(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"age": models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"age": models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"age": models.NewValue(35),
+	})
+
+	// Count users with age > 26
+	count, err := tree.CountWhere("root/mydb/users", "age > 26")
+	if err != nil {
+		t.Fatalf("CountWhere failed: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("Expected count 2, got %d", count)
+	}
+}
+
+func TestUpdateRowsWhere(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name":   models.NewValue("Alice"),
+		"status": models.NewValue("pending"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name":   models.NewValue("Bob"),
+		"status": models.NewValue("pending"),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"name":   models.NewValue("Charlie"),
+		"status": models.NewValue("active"),
+	})
+
+	// Update all pending users to active
+	count, err := tree.UpdateRowsWhere("root/mydb/users", `status == "pending"`, map[string]interface{}{
+		"status": "active",
+	})
+
+	if err != nil {
+		t.Fatalf("UpdateRowsWhere failed: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("Expected to update 2 rows, updated %d", count)
+	}
+
+	// Verify updates
+	row, _ := tree.GetRow("root/mydb/users", "user1")
+	if row["status"].AsString() != "active" {
+		t.Error("Expected user1 status to be 'active'")
+	}
+}
+
+func TestDeleteRowsWhere(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"age": models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"age": models.NewValue(25),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user3", models.Row{
+		"age": models.NewValue(35),
+	})
+
+	// Delete users with age < 30
+	count, err := tree.DeleteRowsWhere("root/mydb/users", "age < 30")
+	if err != nil {
+		t.Fatalf("DeleteRowsWhere failed: %v", err)
+	}
+
+	if count != 1 {
+		t.Errorf("Expected to delete 1 row, deleted %d", count)
+	}
+
+	// Verify deletion
+	remaining, _ := tree.GetRowCount("root/mydb/users")
+	if remaining != 2 {
+		t.Errorf("Expected 2 remaining rows, got %d", remaining)
+	}
+}
+
+func TestFirstRow(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Charlie"),
+		"age":  models.NewValue(30),
+	})
+	tree.InsertRowWithID("root/mydb/users", "user2", models.Row{
+		"name": models.NewValue("Alice"),
+		"age":  models.NewValue(25),
+	})
+
+	// Get first row sorted by name
+	row, err := tree.FirstRow("root/mydb/users", "age > 0", []SortField{
+		{FieldName: "name", Direction: SortAsc},
+	})
+
+	if err != nil {
+		t.Fatalf("FirstRow failed: %v", err)
+	}
+
+	if row == nil {
+		t.Fatal("Expected a row, got nil")
+	}
+
+	if row["name"].AsString() != "Alice" {
+		t.Errorf("Expected first row to be Alice, got %s", row["name"].AsString())
+	}
+}
+
+func TestExistsWhere(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Alice"),
+	})
+
+	// Check if Alice exists
+	exists, err := tree.ExistsWhere("root/mydb/users", `name == "Alice"`)
+	if err != nil {
+		t.Fatalf("ExistsWhere failed: %v", err)
+	}
+
+	if !exists {
+		t.Error("Expected Alice to exist")
+	}
+
+	// Check if Bob exists
+	exists, _ = tree.ExistsWhere("root/mydb/users", `name == "Bob"`)
+	if exists {
+		t.Error("Expected Bob not to exist")
+	}
+}
+
+func TestFindRowsCursor(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	for i := 0; i < 5; i++ {
+		tree.InsertRowWithID("root/mydb/users", fmt.Sprintf("user%d", i), models.Row{
+			"idx": models.NewValue(i),
+		})
+	}
+
+	// Get cursor with limit
+	opts := &QueryOptions{Limit: 3}
+	cursor, err := tree.FindRowsCursor("root/mydb/users", "idx >= 0", opts)
+	if err != nil {
+		t.Fatalf("FindRowsCursor failed: %v", err)
+	}
+
+	// Verify cursor behavior
+	if cursor.Count() != 5 {
+		t.Errorf("Expected count 5, got %d", cursor.Count())
+	}
+
+	// Iterate with limit
+	count := 0
+	for i := 0; i < cursor.Count(); i++ {
+		count++
+		if !cursor.Next() {
+			break
+		}
+	}
+
+	// Should stop at 3 due to limit
+	if count != 3 {
+		t.Errorf("Expected to iterate 3 times with limit, got %d", count)
+	}
+}
+
+func TestAnalyzeQuery(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	// Setup
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert test data
+	tree.InsertRowWithID("root/mydb/users", "user1", models.Row{
+		"name": models.NewValue("Alice"),
+		"age":  models.NewValue(30),
+	})
+
+	// Create index
+	tree.CreateIndex("root/mydb/users", "idx_name", []string{"name"}, false)
+
+	// Test full scan query
+	plan1, err := tree.AnalyzeQuery("root/mydb/users", parser.ParseExprQuery("age > 25"))
+	if err != nil {
+		t.Fatalf("AnalyzeQuery failed: %v", err)
+	}
+
+	if plan1.Strategy != StrategyFullScan {
+		t.Error("Expected full scan strategy for non-indexed field")
+	}
+
+	// Test index scan query
+	plan2, err := tree.AnalyzeQuery("root/mydb/users", parser.ParseExprQuery(`name == "Alice"`))
+	if err != nil {
+		t.Fatalf("AnalyzeQuery failed: %v", err)
+	}
+
+	if plan2.Strategy != StrategyIndexScan {
+		t.Error("Expected index scan strategy for indexed field")
+	}
+
+	if plan2.IndexName != "idx_name" {
+		t.Errorf("Expected index name 'idx_name', got '%s'", plan2.IndexName)
 	}
 }

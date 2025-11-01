@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/sfi2k7/blueconfig/models"
+	"github.com/sfi2k7/blueconfig/parser"
 )
 
 // ============================================================================
@@ -2078,4 +2079,375 @@ func (t *Tree) NewSortedQueryCursor(tablePath string, rowIDs []string, sortField
 	}
 
 	return t.NewQueryCursor(tablePath, sortedIDs), nil
+}
+
+// ============================================================================
+// Query Planner and Execution
+// ============================================================================
+
+// QueryStrategy represents the execution strategy for a query
+type QueryStrategy int
+
+const (
+	StrategyFullScan  QueryStrategy = iota // Full table scan
+	StrategyIndexScan                      // Single index scan
+	StrategyMultiIndex                     // Multiple index intersection (future)
+)
+
+// QueryPlan describes how a query will be executed
+type QueryPlan struct {
+	Strategy      QueryStrategy
+	TablePath     string
+	Query         parser.Query
+	IndexName     string   // For index-based strategies
+	IndexKey      string   // For exact match index lookups
+	RequiredFields []string // Fields needed for query evaluation
+	EstimatedRows int      // Estimated result size
+}
+
+// AnalyzeQuery examines a query and determines the optimal execution strategy.
+// It checks for available indexes and chooses between index scan vs full scan.
+func (t *Tree) AnalyzeQuery(tablePath string, query parser.Query) (*QueryPlan, error) {
+	// Validate table
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	plan := &QueryPlan{
+		Strategy:   StrategyFullScan, // Default to full scan
+		TablePath:  tablePath,
+		Query:      query,
+		IndexName:  "",
+		IndexKey:   "",
+	}
+
+	// Extract required fields from query
+	deps := parser.ExtractQueryDependencies(query)
+	plan.RequiredFields = deps.Properties
+
+	// Get table row count for cost estimation
+	rowCount, _ := t.GetRowCount(tablePath)
+	plan.EstimatedRows = rowCount
+
+	// Check if we can use an index
+	// Look for simple equality conditions that match an index
+	indexes, err := t.ListIndexes(tablePath)
+	if err != nil || len(indexes) == 0 {
+		return plan, nil // No indexes, use full scan
+	}
+
+	// Try to find a matching index for simple conditions
+	// This handles queries like: field == value
+	if indexName, indexKey, found := t.findMatchingIndex(tablePath, query, indexes); found {
+		plan.Strategy = StrategyIndexScan
+		plan.IndexName = indexName
+		plan.IndexKey = indexKey
+
+		// Estimate rows from index
+		rowIDs, _ := t.lookupIndex(tablePath, indexName, indexKey)
+		plan.EstimatedRows = len(rowIDs)
+	}
+
+	return plan, nil
+}
+
+// findMatchingIndex tries to find an index that can be used for the query.
+// Returns (indexName, indexKey, found)
+func (t *Tree) findMatchingIndex(tablePath string, query parser.Query, indexes []string) (string, string, bool) {
+	// Look for simple equality conditions in the query
+	// Format: field == "value" or field == 'value'
+
+	for _, condition := range query.Conditions {
+		// Only handle == operator for now
+		if condition.Op != "==" {
+			continue
+		}
+
+		// Check if left side is a property and right side is a literal value
+		if condition.Left != nil && condition.Left.Property != "" &&
+			condition.Right != nil && condition.Right.Value != nil {
+
+			fieldName := condition.Left.Property
+			fieldValue := condition.Right.Value
+
+			// Check if we have an index on this field
+			for _, indexName := range indexes {
+				info, err := t.GetIndexInfo(tablePath, indexName)
+				if err != nil {
+					continue
+				}
+
+				// Check if this is a single-field index on our field
+				if info.Type == IndexTypeSingle && len(info.Fields) == 1 && info.Fields[0] == fieldName {
+					// Found a matching index!
+					return indexName, fmt.Sprintf("%v", fieldValue), true
+				}
+			}
+		}
+	}
+
+	return "", "", false
+}
+
+// ExecuteQueryPlan executes a query plan and returns row IDs.
+// This is the core query execution engine.
+func (t *Tree) ExecuteQueryPlan(plan *QueryPlan) ([]string, error) {
+	var candidateIDs []string
+
+	// Step 1: Get candidate row IDs based on strategy
+	switch plan.Strategy {
+	case StrategyIndexScan:
+		// Use index to get candidate IDs
+		ids, err := t.lookupIndex(plan.TablePath, plan.IndexName, plan.IndexKey)
+		if err != nil {
+			return nil, err
+		}
+		candidateIDs = ids
+
+	case StrategyFullScan:
+		// Get all row IDs
+		ids, err := t.GetRowIDsOnly(plan.TablePath)
+		if err != nil {
+			return nil, err
+		}
+		candidateIDs = ids
+
+	default:
+		return nil, fmt.Errorf("unsupported query strategy: %v", plan.Strategy)
+	}
+
+	// Step 2: Filter candidates using query conditions
+	// Load only required fields for memory efficiency
+	matchingIDs := []string{}
+
+	for _, rowID := range candidateIDs {
+		// Load only fields needed for query evaluation
+		partialRow, err := t.GetRowFields(plan.TablePath, rowID, plan.RequiredFields)
+		if err != nil {
+			continue // Skip rows that can't be loaded
+		}
+
+		// Create Object for query matching
+		obj := models.NewObject(partialRow)
+
+		// Check if row matches query
+		if match, err := obj.Match(plan.Query); err == nil && match {
+			matchingIDs = append(matchingIDs, rowID)
+		}
+	}
+
+	return matchingIDs, nil
+}
+
+// ============================================================================
+// Query CRUD Operations
+// ============================================================================
+
+// QueryOptions provides options for query execution (pagination, sorting, etc.)
+type QueryOptions struct {
+	Limit      int         // Maximum rows to return (0 = no limit)
+	Skip       int         // Number of rows to skip (offset)
+	SortFields []SortField // Fields to sort by
+}
+
+// FindRows executes a query and returns matching rows.
+// This is the main query execution method with automatic index usage.
+func (t *Tree) FindRows(tablePath string, queryStr string, opts *QueryOptions) ([]models.Row, error) {
+	// Parse query
+	query := parser.ParseExprQuery(queryStr)
+
+	// Analyze and create execution plan
+	plan, err := t.AnalyzeQuery(tablePath, query)
+	if err != nil {
+		return nil, fmt.Errorf("query analysis failed: %v", err)
+	}
+
+	// Execute query plan to get matching row IDs
+	rowIDs, err := t.ExecuteQueryPlan(plan)
+	if err != nil {
+		return nil, fmt.Errorf("query execution failed: %v", err)
+	}
+
+	// Apply sorting if requested
+	if opts != nil && len(opts.SortFields) > 0 {
+		rowIDs, err = t.SortRowsByFields(tablePath, rowIDs, opts.SortFields)
+		if err != nil {
+			return nil, fmt.Errorf("sorting failed: %v", err)
+		}
+	}
+
+	// Apply pagination (skip/limit)
+	if opts != nil {
+		if opts.Skip > 0 && opts.Skip < len(rowIDs) {
+			rowIDs = rowIDs[opts.Skip:]
+		}
+		if opts.Limit > 0 && opts.Limit < len(rowIDs) {
+			rowIDs = rowIDs[:opts.Limit]
+		}
+	}
+
+	// Load full rows for results
+	results := make([]models.Row, 0, len(rowIDs))
+	for _, rowID := range rowIDs {
+		row, err := t.GetRow(tablePath, rowID)
+		if err != nil {
+			continue // Skip rows that can't be loaded
+		}
+		results = append(results, row)
+	}
+
+	return results, nil
+}
+
+// FindRowsCursor executes a query and returns a cursor for memory-efficient iteration.
+// This is the cursor-based version of FindRows - more memory efficient for large results.
+func (t *Tree) FindRowsCursor(tablePath string, queryStr string, opts *QueryOptions) (*QueryCursor, error) {
+	// Parse query
+	query := parser.ParseExprQuery(queryStr)
+
+	// Analyze and create execution plan
+	plan, err := t.AnalyzeQuery(tablePath, query)
+	if err != nil {
+		return nil, fmt.Errorf("query analysis failed: %v", err)
+	}
+
+	// Execute query plan to get matching row IDs
+	rowIDs, err := t.ExecuteQueryPlan(plan)
+	if err != nil {
+		return nil, fmt.Errorf("query execution failed: %v", err)
+	}
+
+	// Apply sorting if requested
+	if opts != nil && len(opts.SortFields) > 0 {
+		rowIDs, err = t.SortRowsByFields(tablePath, rowIDs, opts.SortFields)
+		if err != nil {
+			return nil, fmt.Errorf("sorting failed: %v", err)
+		}
+	}
+
+	// Create cursor
+	cursor := t.NewQueryCursor(tablePath, rowIDs)
+
+	// Apply pagination if requested
+	if opts != nil {
+		if opts.Skip > 0 {
+			cursor = cursor.WithSkip(opts.Skip)
+		}
+		if opts.Limit > 0 {
+			cursor = cursor.WithLimit(opts.Limit)
+		}
+	}
+
+	return cursor, nil
+}
+
+// CountWhere counts rows matching a query without loading data.
+// This is more efficient than FindRows when you only need the count.
+func (t *Tree) CountWhere(tablePath string, queryStr string) (int, error) {
+	// Parse query
+	query := parser.ParseExprQuery(queryStr)
+
+	// Analyze and create execution plan
+	plan, err := t.AnalyzeQuery(tablePath, query)
+	if err != nil {
+		return 0, fmt.Errorf("query analysis failed: %v", err)
+	}
+
+	// Execute query plan to get matching row IDs
+	rowIDs, err := t.ExecuteQueryPlan(plan)
+	if err != nil {
+		return 0, fmt.Errorf("query execution failed: %v", err)
+	}
+
+	return len(rowIDs), nil
+}
+
+// UpdateRowsWhere updates all rows matching a query.
+// Returns the number of rows updated.
+func (t *Tree) UpdateRowsWhere(tablePath string, queryStr string, updates map[string]interface{}) (int, error) {
+	// Parse query
+	query := parser.ParseExprQuery(queryStr)
+
+	// Analyze and create execution plan
+	plan, err := t.AnalyzeQuery(tablePath, query)
+	if err != nil {
+		return 0, fmt.Errorf("query analysis failed: %v", err)
+	}
+
+	// Execute query plan to get matching row IDs
+	rowIDs, err := t.ExecuteQueryPlan(plan)
+	if err != nil {
+		return 0, fmt.Errorf("query execution failed: %v", err)
+	}
+
+	// Update each matching row
+	updateCount := 0
+	for _, rowID := range rowIDs {
+		err := t.UpdateRowFields(tablePath, rowID, updates)
+		if err == nil {
+			updateCount++
+		}
+	}
+
+	return updateCount, nil
+}
+
+// DeleteRowsWhere deletes all rows matching a query.
+// Returns the number of rows deleted.
+func (t *Tree) DeleteRowsWhere(tablePath string, queryStr string) (int, error) {
+	// Parse query
+	query := parser.ParseExprQuery(queryStr)
+
+	// Analyze and create execution plan
+	plan, err := t.AnalyzeQuery(tablePath, query)
+	if err != nil {
+		return 0, fmt.Errorf("query analysis failed: %v", err)
+	}
+
+	// Execute query plan to get matching row IDs
+	rowIDs, err := t.ExecuteQueryPlan(plan)
+	if err != nil {
+		return 0, fmt.Errorf("query execution failed: %v", err)
+	}
+
+	// Delete each matching row
+	deleteCount := 0
+	for _, rowID := range rowIDs {
+		err := t.DeleteRow(tablePath, rowID)
+		if err == nil {
+			deleteCount++
+		}
+	}
+
+	return deleteCount, nil
+}
+
+// FirstRow finds the first row matching a query (with optional sorting).
+// Returns nil if no rows match.
+func (t *Tree) FirstRow(tablePath string, queryStr string, sortFields []SortField) (models.Row, error) {
+	opts := &QueryOptions{
+		Limit:      1,
+		SortFields: sortFields,
+	}
+
+	rows, err := t.FindRows(tablePath, queryStr, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(rows) == 0 {
+		return nil, nil // No matching rows
+	}
+
+	return rows[0], nil
+}
+
+// ExistsWhere checks if any rows match a query without loading data.
+// This is more efficient than CountWhere when you only need to know if matches exist.
+func (t *Tree) ExistsWhere(tablePath string, queryStr string) (bool, error) {
+	count, err := t.CountWhere(tablePath, queryStr)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
