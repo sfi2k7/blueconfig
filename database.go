@@ -2843,3 +2843,206 @@ func (t *Tree) UpsertFields(tablePath, rowID string, fields map[string]interface
 		return true, nil // Was inserted
 	}
 }
+
+// ============================================================================
+// Bulk Operations (High-Performance Batch Processing)
+// ============================================================================
+
+// BulkInsert inserts multiple rows efficiently in a single operation.
+// All inserts are atomic - either all succeed or all fail.
+// Returns (successCount, error)
+func (t *Tree) BulkInsert(tablePath string, rows map[string]models.Row) (int, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return 0, err
+	}
+
+	if len(rows) == 0 {
+		return 0, nil
+	}
+
+	// Use a transaction for atomicity
+	txn, err := t.BeginTransaction()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer txn.Rollback()
+
+	successCount := 0
+	for rowID, row := range rows {
+		err := txn.InsertRowWithID(tablePath, rowID, row)
+		if err != nil {
+			return successCount, fmt.Errorf("bulk insert failed at row %s: %v", rowID, err)
+		}
+		successCount++
+	}
+
+	// Commit all inserts
+	if err := txn.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit bulk insert: %v", err)
+	}
+
+	return successCount, nil
+}
+
+// BulkUpdate updates multiple rows efficiently in a single operation.
+// All updates are atomic - either all succeed or all fail.
+// Returns (successCount, error)
+func (t *Tree) BulkUpdate(tablePath string, updates map[string]models.Row) (int, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return 0, err
+	}
+
+	if len(updates) == 0 {
+		return 0, nil
+	}
+
+	// Use a transaction for atomicity
+	txn, err := t.BeginTransaction()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer txn.Rollback()
+
+	successCount := 0
+	for rowID, row := range updates {
+		err := txn.UpdateRow(tablePath, rowID, row)
+		if err != nil {
+			return successCount, fmt.Errorf("bulk update failed at row %s: %v", rowID, err)
+		}
+		successCount++
+	}
+
+	// Commit all updates
+	if err := txn.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit bulk update: %v", err)
+	}
+
+	return successCount, nil
+}
+
+// BulkUpdateFields updates specific fields across multiple rows.
+// All updates are atomic - either all succeed or all fail.
+// Returns (successCount, error)
+func (t *Tree) BulkUpdateFields(tablePath string, updates map[string]map[string]interface{}) (int, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return 0, err
+	}
+
+	if len(updates) == 0 {
+		return 0, nil
+	}
+
+	// Use a transaction for atomicity
+	txn, err := t.BeginTransaction()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer txn.Rollback()
+
+	successCount := 0
+	for rowID, fields := range updates {
+		err := txn.UpdateRowFields(tablePath, rowID, fields)
+		if err != nil {
+			return successCount, fmt.Errorf("bulk update fields failed at row %s: %v", rowID, err)
+		}
+		successCount++
+	}
+
+	// Commit all updates
+	if err := txn.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit bulk update fields: %v", err)
+	}
+
+	return successCount, nil
+}
+
+// BulkDelete deletes multiple rows efficiently in a single operation.
+// All deletes are atomic - either all succeed or all fail.
+// Returns (successCount, error)
+func (t *Tree) BulkDelete(tablePath string, rowIDs []string) (int, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return 0, err
+	}
+
+	if len(rowIDs) == 0 {
+		return 0, nil
+	}
+
+	// Use a transaction for atomicity
+	txn, err := t.BeginTransaction()
+	if err != nil {
+		return 0, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer txn.Rollback()
+
+	successCount := 0
+	for _, rowID := range rowIDs {
+		err := txn.DeleteRow(tablePath, rowID)
+		if err != nil {
+			return successCount, fmt.Errorf("bulk delete failed at row %s: %v", rowID, err)
+		}
+		successCount++
+	}
+
+	// Commit all deletes
+	if err := txn.Commit(); err != nil {
+		return 0, fmt.Errorf("failed to commit bulk delete: %v", err)
+	}
+
+	return successCount, nil
+}
+
+// BulkUpsert performs bulk upsert (insert or update) operations.
+// All operations are atomic - either all succeed or all fail.
+// Returns (insertCount, updateCount, error)
+func (t *Tree) BulkUpsert(tablePath string, rows map[string]models.Row) (int, int, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return 0, 0, err
+	}
+
+	if len(rows) == 0 {
+		return 0, 0, nil
+	}
+
+	insertCount := 0
+	updateCount := 0
+
+	// Check which rows exist (batch check for efficiency)
+	existingRows := make(map[string]bool)
+	for rowID := range rows {
+		exists, _ := t.RowExists(tablePath, rowID)
+		existingRows[rowID] = exists
+	}
+
+	// Use a transaction for atomicity
+	txn, err := t.BeginTransaction()
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to begin transaction: %v", err)
+	}
+	defer txn.Rollback()
+
+	for rowID, row := range rows {
+		if existingRows[rowID] {
+			// Update existing row
+			err := txn.UpdateRow(tablePath, rowID, row)
+			if err != nil {
+				return insertCount, updateCount, fmt.Errorf("bulk upsert failed at row %s: %v", rowID, err)
+			}
+			updateCount++
+		} else {
+			// Insert new row
+			err := txn.InsertRowWithID(tablePath, rowID, row)
+			if err != nil {
+				return insertCount, updateCount, fmt.Errorf("bulk upsert failed at row %s: %v", rowID, err)
+			}
+			insertCount++
+		}
+	}
+
+	// Commit all operations
+	if err := txn.Commit(); err != nil {
+		return 0, 0, fmt.Errorf("failed to commit bulk upsert: %v", err)
+	}
+
+	return insertCount, updateCount, nil
+}

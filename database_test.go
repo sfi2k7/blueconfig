@@ -3895,3 +3895,203 @@ func TestUpsertFields(t *testing.T) {
 		t.Errorf("Expected city 'NYC', got %v", row["city"].AsString())
 	}
 }
+
+// ============================================================================
+// Bulk Operations Tests
+// ============================================================================
+
+func TestBulkInsert(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	rows := map[string]models.Row{
+		"user1": models.NewRow(map[string]interface{}{"name": "Alice", "age": 30}),
+		"user2": models.NewRow(map[string]interface{}{"name": "Bob", "age": 25}),
+		"user3": models.NewRow(map[string]interface{}{"name": "Charlie", "age": 35}),
+	}
+
+	count, err := tree.BulkInsert("root/mydb/users", rows)
+	if err != nil {
+		t.Fatalf("BulkInsert failed: %v", err)
+	}
+
+	if count != 3 {
+		t.Errorf("Expected 3 inserts, got %d", count)
+	}
+
+	// Verify all rows exist
+	for rowID := range rows {
+		_, err := tree.GetRow("root/mydb/users", rowID)
+		if err != nil {
+			t.Errorf("Row %s should exist", rowID)
+		}
+	}
+}
+
+func TestBulkUpdate(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial rows
+	tree.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{"name": "Alice", "age": 30}))
+	tree.InsertRowWithID("root/mydb/users", "user2", models.NewRow(map[string]interface{}{"name": "Bob", "age": 25}))
+
+	// Bulk update
+	updates := map[string]models.Row{
+		"user1": models.NewRow(map[string]interface{}{"name": "Alice Updated", "age": 31}),
+		"user2": models.NewRow(map[string]interface{}{"name": "Bob Updated", "age": 26}),
+	}
+
+	count, err := tree.BulkUpdate("root/mydb/users", updates)
+	if err != nil {
+		t.Fatalf("BulkUpdate failed: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("Expected 2 updates, got %d", count)
+	}
+
+	// Verify updates
+	row1, _ := tree.GetRow("root/mydb/users", "user1")
+	if row1["name"].AsString() != "Alice Updated" {
+		t.Error("user1 name should be updated")
+	}
+
+	row2, _ := tree.GetRow("root/mydb/users", "user2")
+	if row2["age"].AsString() != "26" {
+		t.Error("user2 age should be updated")
+	}
+}
+
+func TestBulkUpdateFields(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert initial rows
+	tree.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{"name": "Alice", "age": 30}))
+	tree.InsertRowWithID("root/mydb/users", "user2", models.NewRow(map[string]interface{}{"name": "Bob", "age": 25}))
+
+	// Bulk update fields
+	updates := map[string]map[string]interface{}{
+		"user1": {"age": 31, "city": "NYC"},
+		"user2": {"age": 26, "city": "LA"},
+	}
+
+	count, err := tree.BulkUpdateFields("root/mydb/users", updates)
+	if err != nil {
+		t.Fatalf("BulkUpdateFields failed: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("Expected 2 updates, got %d", count)
+	}
+
+	// Verify field updates
+	row1, _ := tree.GetRow("root/mydb/users", "user1")
+	if row1["city"].AsString() != "NYC" {
+		t.Error("user1 city should be NYC")
+	}
+
+	row2, _ := tree.GetRow("root/mydb/users", "user2")
+	if row2["city"].AsString() != "LA" {
+		t.Error("user2 city should be LA")
+	}
+}
+
+func TestBulkDelete(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert rows
+	tree.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{"name": "Alice"}))
+	tree.InsertRowWithID("root/mydb/users", "user2", models.NewRow(map[string]interface{}{"name": "Bob"}))
+	tree.InsertRowWithID("root/mydb/users", "user3", models.NewRow(map[string]interface{}{"name": "Charlie"}))
+	tree.InsertRowWithID("root/mydb/users", "user4", models.NewRow(map[string]interface{}{"name": "David"}))
+
+	// Bulk delete
+	count, err := tree.BulkDelete("root/mydb/users", []string{"user2", "user3"})
+	if err != nil {
+		t.Fatalf("BulkDelete failed: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("Expected 2 deletes, got %d", count)
+	}
+
+	// Verify deletions
+	_, err = tree.GetRow("root/mydb/users", "user2")
+	if err == nil {
+		t.Error("user2 should be deleted")
+	}
+
+	_, err = tree.GetRow("root/mydb/users", "user3")
+	if err == nil {
+		t.Error("user3 should be deleted")
+	}
+
+	// Verify remaining rows
+	_, err = tree.GetRow("root/mydb/users", "user1")
+	if err != nil {
+		t.Error("user1 should still exist")
+	}
+
+	_, err = tree.GetRow("root/mydb/users", "user4")
+	if err != nil {
+		t.Error("user4 should still exist")
+	}
+}
+
+func TestBulkUpsert(t *testing.T) {
+	tree := setupDatabaseTest(t)
+	defer teardownDatabaseTest(t, tree)
+
+	tree.CreateDatabase("root/mydb", nil)
+	tree.CreateTable("root/mydb", "users")
+
+	// Insert some existing rows
+	tree.InsertRowWithID("root/mydb/users", "user1", models.NewRow(map[string]interface{}{"name": "Alice", "age": 30}))
+	tree.InsertRowWithID("root/mydb/users", "user2", models.NewRow(map[string]interface{}{"name": "Bob", "age": 25}))
+
+	// Bulk upsert (1 update, 2 inserts)
+	rows := map[string]models.Row{
+		"user1": models.NewRow(map[string]interface{}{"name": "Alice Updated", "age": 31}),
+		"user3": models.NewRow(map[string]interface{}{"name": "Charlie", "age": 35}),
+		"user4": models.NewRow(map[string]interface{}{"name": "David", "age": 40}),
+	}
+
+	insertCount, updateCount, err := tree.BulkUpsert("root/mydb/users", rows)
+	if err != nil {
+		t.Fatalf("BulkUpsert failed: %v", err)
+	}
+
+	if insertCount != 2 {
+		t.Errorf("Expected 2 inserts, got %d", insertCount)
+	}
+
+	if updateCount != 1 {
+		t.Errorf("Expected 1 update, got %d", updateCount)
+	}
+
+	// Verify results
+	row1, _ := tree.GetRow("root/mydb/users", "user1")
+	if row1["name"].AsString() != "Alice Updated" {
+		t.Error("user1 should be updated")
+	}
+
+	row3, _ := tree.GetRow("root/mydb/users", "user3")
+	if row3["name"].AsString() != "Charlie" {
+		t.Error("user3 should be inserted")
+	}
+}
