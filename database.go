@@ -830,6 +830,14 @@ func (t *Tree) InsertRow(tablePath string, row models.Row) (string, error) {
 		return "", fmt.Errorf("failed to update row count: %v", err)
 	}
 
+	// Add to all applicable indexes
+	if err := t.addToIndex(tablePath, rowID, row); err != nil {
+		// Rollback: remove the row
+		t.DeleteNode(rowPath, true)
+		t.DecrementRowCount(tablePath)
+		return "", fmt.Errorf("failed to update indexes: %v", err)
+	}
+
 	return rowID, nil
 }
 
@@ -881,6 +889,14 @@ func (t *Tree) InsertRowWithID(tablePath, rowID string, row models.Row) error {
 		return fmt.Errorf("failed to update row count: %v", err)
 	}
 
+	// Add to all applicable indexes
+	if err := t.addToIndex(tablePath, rowID, row); err != nil {
+		// Rollback: remove the row
+		t.DeleteNode(rowPath, true)
+		t.DecrementRowCount(tablePath)
+		return fmt.Errorf("failed to update indexes: %v", err)
+	}
+
 	return nil
 }
 
@@ -929,8 +945,8 @@ func (t *Tree) UpdateRow(tablePath, rowID string, row models.Row) error {
 
 	rowPath := tablePath + "/" + rowID
 
-	// Check if row exists
-	_, err := t.GetNodesInPath(rowPath)
+	// Get old row for index maintenance
+	oldRow, err := t.GetRow(tablePath, rowID)
 	if err != nil {
 		return fmt.Errorf("row not found: %s", rowID)
 	}
@@ -959,6 +975,11 @@ func (t *Tree) UpdateRow(tablePath, rowID string, row models.Row) error {
 		return fmt.Errorf("failed to update row: %v", err)
 	}
 
+	// Update indexes
+	if err := t.updateIndex(tablePath, rowID, oldRow, row); err != nil {
+		return fmt.Errorf("failed to update indexes: %v", err)
+	}
+
 	// Update last updated timestamp
 	now := strconv.FormatInt(time.Now().Unix(), 10)
 	t.SetValue(tablePath+"/__lastupdated", now)
@@ -975,8 +996,8 @@ func (t *Tree) UpdateRowFields(tablePath, rowID string, fields map[string]interf
 
 	rowPath := tablePath + "/" + rowID
 
-	// Check if row exists
-	_, err := t.GetNodesInPath(rowPath)
+	// Get old row for index maintenance
+	oldRow, err := t.GetRow(tablePath, rowID)
 	if err != nil {
 		return fmt.Errorf("row not found: %s", rowID)
 	}
@@ -999,6 +1020,17 @@ func (t *Tree) UpdateRowFields(tablePath, rowID string, fields map[string]interf
 		return fmt.Errorf("failed to update fields: %v", err)
 	}
 
+	// Get updated row for index maintenance
+	newRow, err := t.GetRow(tablePath, rowID)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve updated row: %v", err)
+	}
+
+	// Update indexes
+	if err := t.updateIndex(tablePath, rowID, oldRow, newRow); err != nil {
+		return fmt.Errorf("failed to update indexes: %v", err)
+	}
+
 	// Update last updated timestamp
 	now := strconv.FormatInt(time.Now().Unix(), 10)
 	t.SetValue(tablePath+"/__lastupdated", now)
@@ -1015,8 +1047,19 @@ func (t *Tree) DeleteRow(tablePath, rowID string) error {
 
 	rowPath := tablePath + "/" + rowID
 
+	// Get row data before deletion for index maintenance
+	row, err := t.GetRow(tablePath, rowID)
+	if err != nil {
+		return fmt.Errorf("row not found: %s", rowID)
+	}
+
+	// Remove from indexes first
+	if err := t.removeFromIndex(tablePath, rowID, row); err != nil {
+		return fmt.Errorf("failed to update indexes: %v", err)
+	}
+
 	// Delete the row node
-	err := t.DeleteNode(rowPath, true)
+	err = t.DeleteNode(rowPath, true)
 	if err != nil {
 		return fmt.Errorf("failed to delete row: %v", err)
 	}
@@ -1154,4 +1197,885 @@ func (t *Tree) RowExists(tablePath, rowID string) (bool, error) {
 	}
 
 	return true, nil
+}
+
+// ============================================================================
+// Index Management
+// ============================================================================
+
+// Index constants
+const (
+	IndexTypeSingle    = "single"
+	IndexTypeComposite = "composite"
+	IndexEntriesNode   = "_entries" // Bucket for index entries
+)
+
+// IndexInfo represents index metadata
+type IndexInfo struct {
+	Name       string   `json:"name"`
+	Type       string   `json:"type"`        // "single" or "composite"
+	Fields     []string `json:"fields"`      // Indexed field names
+	Unique     bool     `json:"unique"`      // Unique constraint
+	Created    string   `json:"created"`     // Creation timestamp
+	Updated    string   `json:"updated"`     // Last update timestamp
+	EntryCount int      `json:"entry_count"` // Number of index entries
+}
+
+// CreateIndex creates an index on one or more fields
+func (t *Tree) CreateIndex(tablePath, indexName string, fields []string, unique bool) error {
+	// Validate table
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	if len(fields) == 0 {
+		return errors.New("at least one field is required for index")
+	}
+
+	// Validate index name
+	if indexName == "" || strings.HasPrefix(indexName, "__") {
+		return errors.New("invalid index name")
+	}
+
+	indexPath := tablePath + "/" + IndicesNode + "/" + indexName
+
+	// Check if index already exists
+	children, err := t.GetNodesInPath(tablePath + "/" + IndicesNode)
+	if err == nil {
+		for _, child := range children {
+			if child == indexName {
+				return fmt.Errorf("index %s already exists", indexName)
+			}
+		}
+	}
+
+	// Determine index type
+	indexType := IndexTypeSingle
+	if len(fields) > 1 {
+		indexType = IndexTypeComposite
+	}
+
+	// Create index metadata
+	now := strconv.FormatInt(time.Now().Unix(), 10)
+	metadata := map[string]interface{}{
+		"__type":        indexType,
+		"__unique":      strconv.FormatBool(unique),
+		"__created":     now,
+		"__updated":     now,
+		"__entry_count": "0",
+	}
+
+	// Store fields as individual properties
+	for i, field := range fields {
+		metadata[fmt.Sprintf("__field_%d", i)] = field
+	}
+
+	// Create index node with metadata
+	err = t.CreateNodeWithProps(indexPath, metadata)
+	if err != nil {
+		return fmt.Errorf("failed to create index metadata: %v", err)
+	}
+
+	// Create entries bucket
+	err = t.CreatePath(indexPath + "/" + IndexEntriesNode)
+	if err != nil {
+		return fmt.Errorf("failed to create index entries: %v", err)
+	}
+
+	// Build index from existing data
+	err = t.buildIndex(tablePath, indexPath, fields, unique)
+	if err != nil {
+		// Rollback: delete index on failure
+		t.DeleteNode(indexPath, true)
+		return fmt.Errorf("failed to build index: %v", err)
+	}
+
+	return nil
+}
+
+// buildIndex scans table and populates index entries
+func (t *Tree) buildIndex(tablePath, indexPath string, fields []string, unique bool) error {
+	entriesPath := indexPath + "/" + IndexEntriesNode
+
+	// First pass: collect all index entries in memory
+	indexEntries := make(map[string][]string) // indexKey -> []rowIDs
+
+	err := t.ScanRows(tablePath, func(rowID string, row models.Row) error {
+		// Extract index key from row
+		indexKey, err := t.buildIndexKey(row, fields)
+		if err != nil {
+			return err
+		}
+
+		// Skip if any field is null
+		if indexKey == "" {
+			return nil
+		}
+
+		// For unique indexes, check for duplicates
+		if unique {
+			if _, exists := indexEntries[indexKey]; exists {
+				return fmt.Errorf("duplicate value for unique index: %s", indexKey)
+			}
+		}
+
+		// Add to in-memory map
+		indexEntries[indexKey] = append(indexEntries[indexKey], rowID)
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Second pass: write all index entries to storage
+	entryCount := 0
+	for indexKey, rowIDs := range indexEntries {
+		keyPath := entriesPath + "/" + indexKey
+
+		// Create bucket for this key
+		err := t.CreatePath(keyPath)
+		if err != nil {
+			return err
+		}
+
+		// Add all row IDs for this key
+		for _, rowID := range rowIDs {
+			err = t.SetValue(keyPath+"/"+rowID, "")
+			if err != nil {
+				return err
+			}
+			entryCount++
+		}
+	}
+
+	// Update entry count
+	t.SetValue(indexPath+"/__entry_count", strconv.Itoa(entryCount))
+	return nil
+}
+
+// buildIndexKey creates an index key from row data
+// For single field: returns field value as string
+// For composite: returns "field1_val|field2_val|field3_val"
+func (t *Tree) buildIndexKey(row models.Row, fields []string) (string, error) {
+	var keyParts []string
+
+	for _, field := range fields {
+		val, exists := row[field]
+		if !exists || val.IsNull() {
+			// Null values are not indexed
+			return "", nil
+		}
+
+		// Convert value to string for key
+		keyParts = append(keyParts, val.AsString())
+	}
+
+	// For single field, return value directly
+	if len(keyParts) == 1 {
+		return keyParts[0], nil
+	}
+
+	// For composite, join with separator
+	return strings.Join(keyParts, "|"), nil
+}
+
+// DropIndex removes an index
+func (t *Tree) DropIndex(tablePath, indexName string) error {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	indexPath := tablePath + "/" + IndicesNode + "/" + indexName
+
+	// Check if index exists
+	_, err := t.GetNodesInPath(indexPath)
+	if err != nil {
+		return fmt.Errorf("index %s does not exist", indexName)
+	}
+
+	// Delete index node and all entries
+	return t.DeleteNode(indexPath, true)
+}
+
+// ListIndexes returns all index names in a table
+func (t *Tree) ListIndexes(tablePath string) ([]string, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	indicesPath := tablePath + "/" + IndicesNode
+
+	children, err := t.GetNodesInPath(indicesPath)
+	if err != nil {
+		// No indices node means no indexes
+		return []string{}, nil
+	}
+
+	// Filter out special nodes
+	var indexes []string
+	for _, child := range children {
+		if !t.isSpecialNode(child) {
+			indexes = append(indexes, child)
+		}
+	}
+
+	return indexes, nil
+}
+
+// GetIndexInfo retrieves index metadata
+func (t *Tree) GetIndexInfo(tablePath, indexName string) (*IndexInfo, error) {
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	indexPath := tablePath + "/" + IndicesNode + "/" + indexName
+
+	// Get index metadata
+	props, err := t.GetAllPropsWithValues(indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("index %s not found", indexName)
+	}
+
+	info := &IndexInfo{
+		Name: indexName,
+		Type: props["__type"],
+	}
+
+	// Parse unique flag
+	if uniqueStr := props["__unique"]; uniqueStr != "" {
+		info.Unique = uniqueStr == "true"
+	}
+
+	// Parse timestamps
+	info.Created = props["__created"]
+	info.Updated = props["__updated"]
+
+	// Parse entry count
+	if countStr := props["__entry_count"]; countStr != "" {
+		if count, err := strconv.Atoi(countStr); err == nil {
+			info.EntryCount = count
+		}
+	}
+
+	// Extract fields from __field_N properties
+	i := 0
+	for {
+		fieldKey := fmt.Sprintf("__field_%d", i)
+		if field, exists := props[fieldKey]; exists {
+			info.Fields = append(info.Fields, field)
+			i++
+		} else {
+			break
+		}
+	}
+
+	return info, nil
+}
+
+// RebuildIndex drops and recreates an index
+func (t *Tree) RebuildIndex(tablePath, indexName string) error {
+	// Get index info before dropping
+	info, err := t.GetIndexInfo(tablePath, indexName)
+	if err != nil {
+		return err
+	}
+
+	// Drop existing index
+	err = t.DropIndex(tablePath, indexName)
+	if err != nil {
+		return err
+	}
+
+	// Recreate index
+	return t.CreateIndex(tablePath, indexName, info.Fields, info.Unique)
+}
+
+// addToIndex adds a row to all applicable indexes
+func (t *Tree) addToIndex(tablePath, rowID string, row models.Row) error {
+	indexes, err := t.ListIndexes(tablePath)
+	if err != nil || len(indexes) == 0 {
+		return nil // No indexes, nothing to do
+	}
+
+	for _, indexName := range indexes {
+		indexPath := tablePath + "/" + IndicesNode + "/" + indexName
+		info, err := t.GetIndexInfo(tablePath, indexName)
+		if err != nil {
+			continue
+		}
+
+		// Build index key for this row
+		indexKey, err := t.buildIndexKey(row, info.Fields)
+		if err != nil || indexKey == "" {
+			continue // Skip if key can't be built or is null
+		}
+
+		entriesPath := indexPath + "/" + IndexEntriesNode
+		keyPath := entriesPath + "/" + indexKey
+
+		// For unique indexes, check for duplicates
+		if info.Unique {
+			props, err := t.GetAllPropsWithValues(keyPath)
+			if err == nil && len(props) > 0 {
+				return fmt.Errorf("duplicate value for unique index %s: %s", indexName, indexKey)
+			}
+		}
+
+		// Create bucket for this key if needed
+		t.CreatePath(keyPath)
+
+		// Add row ID to this key
+		t.SetValue(keyPath+"/"+rowID, "")
+
+		// Increment entry count
+		if countStr, _ := t.GetValue(indexPath + "/__entry_count"); countStr != "" {
+			if count, err := strconv.Atoi(countStr); err == nil {
+				t.SetValue(indexPath+"/__entry_count", strconv.Itoa(count+1))
+			}
+		}
+	}
+
+	return nil
+}
+
+// removeFromIndex removes a row from all applicable indexes
+func (t *Tree) removeFromIndex(tablePath, rowID string, row models.Row) error {
+	indexes, err := t.ListIndexes(tablePath)
+	if err != nil || len(indexes) == 0 {
+		return nil
+	}
+
+	for _, indexName := range indexes {
+		indexPath := tablePath + "/" + IndicesNode + "/" + indexName
+		info, err := t.GetIndexInfo(tablePath, indexName)
+		if err != nil {
+			continue
+		}
+
+		// Build index key for this row
+		indexKey, err := t.buildIndexKey(row, info.Fields)
+		if err != nil || indexKey == "" {
+			continue
+		}
+
+		entriesPath := indexPath + "/" + IndexEntriesNode
+		keyPath := entriesPath + "/" + indexKey
+
+		// Remove row ID from this key
+		t.DeleteValue(keyPath, rowID)
+
+		// If this was the last row for this key, remove the key bucket
+		props, err := t.GetAllPropsWithValues(keyPath)
+		if err == nil && len(props) == 0 {
+			t.DeleteNode(keyPath, true)
+		}
+
+		// Decrement entry count
+		if countStr, _ := t.GetValue(indexPath + "/__entry_count"); countStr != "" {
+			if count, err := strconv.Atoi(countStr); err == nil && count > 0 {
+				t.SetValue(indexPath+"/__entry_count", strconv.Itoa(count-1))
+			}
+		}
+	}
+
+	return nil
+}
+
+// updateIndex updates indexes when a row is modified
+func (t *Tree) updateIndex(tablePath, rowID string, oldRow, newRow models.Row) error {
+	// Remove old index entries
+	if oldRow != nil {
+		if err := t.removeFromIndex(tablePath, rowID, oldRow); err != nil {
+			return err
+		}
+	}
+
+	// Add new index entries
+	return t.addToIndex(tablePath, rowID, newRow)
+}
+
+// lookupIndex finds row IDs matching an index key
+func (t *Tree) lookupIndex(tablePath, indexName, indexKey string) ([]string, error) {
+	indexPath := tablePath + "/" + IndicesNode + "/" + indexName
+	entriesPath := indexPath + "/" + IndexEntriesNode
+	keyPath := entriesPath + "/" + indexKey
+
+	// Get all row IDs for this key (stored as properties)
+	props, err := t.GetAllPropsWithValues(keyPath)
+	if err != nil {
+		return []string{}, nil // Key not found, return empty
+	}
+
+	// Extract row IDs (property keys)
+	var rowIDs []string
+	for rowID := range props {
+		rowIDs = append(rowIDs, rowID)
+	}
+
+	return rowIDs, nil
+}
+
+// lookupIndexRange finds row IDs in a range (for composite or range queries)
+func (t *Tree) lookupIndexRange(tablePath, indexName, startKey, endKey string) ([]string, error) {
+	indexPath := tablePath + "/" + IndicesNode + "/" + indexName
+	entriesPath := indexPath + "/" + IndexEntriesNode
+
+	// Get all keys in the index (child buckets of _entries)
+	allKeys, err := t.GetNodesInPath(entriesPath)
+	if err != nil {
+		return []string{}, nil
+	}
+
+	var result []string
+	for _, key := range allKeys {
+		// Check if key is in range
+		if (startKey == "" || key >= startKey) && (endKey == "" || key <= endKey) {
+			keyPath := entriesPath + "/" + key
+			// Get row IDs stored as properties
+			props, err := t.GetAllPropsWithValues(keyPath)
+			if err == nil {
+				for rowID := range props {
+					result = append(result, rowID)
+				}
+			}
+		}
+	}
+
+	return result, nil
+}
+
+// ============================================================================
+// Cursor-Based Query Execution (Memory Efficient)
+// ============================================================================
+
+// RowCursor represents a lightweight reference to a row with only necessary fields loaded.
+// This minimizes memory usage and database lock time during query execution.
+type RowCursor struct {
+	RowID  string      // The row identifier
+	Fields models.Row  // Only the fields needed for query evaluation (partial row)
+}
+
+// QueryCursor provides efficient iteration over query results.
+// It yields row IDs and allows lazy loading of fields as needed.
+// Supports LIMIT, SKIP (offset), and maintains position for pagination.
+type QueryCursor struct {
+	tablePath string
+	rowIDs    []string
+	position  int
+	tree      *Tree
+	limit     int  // Maximum number of rows to return (0 = no limit)
+	skip      int  // Number of rows to skip from start (offset)
+}
+
+// NewQueryCursor creates a cursor for iterating over row IDs
+func (t *Tree) NewQueryCursor(tablePath string, rowIDs []string) *QueryCursor {
+	return &QueryCursor{
+		tablePath: tablePath,
+		rowIDs:    rowIDs,
+		position:  0,
+		tree:      t,
+		limit:     0,
+		skip:      0,
+	}
+}
+
+// WithLimit sets the maximum number of rows to return
+func (c *QueryCursor) WithLimit(limit int) *QueryCursor {
+	c.limit = limit
+	return c
+}
+
+// WithSkip sets the number of rows to skip (offset for pagination)
+func (c *QueryCursor) WithSkip(skip int) *QueryCursor {
+	c.skip = skip
+	c.position = skip // Start from the skip position
+	return c
+}
+
+// WithPagination is a convenience method for LIMIT + SKIP
+// Example: cursor.WithPagination(page=2, pageSize=10) -> Skip(10), Limit(10)
+func (c *QueryCursor) WithPagination(page, pageSize int) *QueryCursor {
+	if page < 1 {
+		page = 1
+	}
+	c.skip = (page - 1) * pageSize
+	c.limit = pageSize
+	c.position = c.skip
+	return c
+}
+
+// Next advances the cursor and returns true if there's a next row
+// Respects LIMIT constraint if set
+func (c *QueryCursor) Next() bool {
+	c.position++
+
+	// Check if we've hit the limit
+	if c.limit > 0 {
+		rowsReturned := c.position - c.skip
+		if rowsReturned >= c.limit {
+			return false
+		}
+	}
+
+	return c.position < len(c.rowIDs)
+}
+
+// HasNext returns true if there are more rows
+// Respects LIMIT constraint if set
+func (c *QueryCursor) HasNext() bool {
+	nextPos := c.position + 1
+
+	// Check if we've hit the limit
+	if c.limit > 0 {
+		rowsReturned := nextPos - c.skip
+		if rowsReturned >= c.limit {
+			return false
+		}
+	}
+
+	return nextPos < len(c.rowIDs)
+}
+
+// CurrentID returns the current row ID
+func (c *QueryCursor) CurrentID() string {
+	if c.position >= len(c.rowIDs) {
+		return ""
+	}
+	return c.rowIDs[c.position]
+}
+
+// LoadFields loads only specific fields for the current row
+func (c *QueryCursor) LoadFields(fields []string) (models.Row, error) {
+	if c.position >= len(c.rowIDs) {
+		return nil, errors.New("cursor out of bounds")
+	}
+	return c.tree.GetRowFields(c.tablePath, c.rowIDs[c.position], fields)
+}
+
+// LoadFullRow loads the complete row (use sparingly)
+func (c *QueryCursor) LoadFullRow() (models.Row, error) {
+	if c.position >= len(c.rowIDs) {
+		return nil, errors.New("cursor out of bounds")
+	}
+	return c.tree.GetRow(c.tablePath, c.rowIDs[c.position])
+}
+
+// Count returns the total number of rows in the cursor
+func (c *QueryCursor) Count() int {
+	return len(c.rowIDs)
+}
+
+// Reset resets the cursor to the beginning
+func (c *QueryCursor) Reset() {
+	c.position = 0
+}
+
+// GetRowFields retrieves only specific fields from a row.
+// This is the key function for memory-efficient querying.
+// Example: GetRowFields(tablePath, rowID, []string{"name", "age"})
+func (t *Tree) GetRowFields(tablePath, rowID string, fields []string) (models.Row, error) {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	rowPath := tablePath + "/" + rowID
+
+	// Get table schema for type information
+	schema, _ := t.GetTableSchema(tablePath)
+
+	// Build partial row with only requested fields
+	row := make(models.Row)
+
+	for _, fieldName := range fields {
+		// Get specific field value
+		value, err := t.GetValue(rowPath + "/" + fieldName)
+		if err != nil {
+			// Field doesn't exist - skip or set as null depending on requirement
+			row[fieldName] = models.NewValue(nil)
+			continue
+		}
+
+		rowVal := models.NewValue(value)
+
+		// Set schema type if available
+		if schema != nil {
+			if schemaType, exists := schema.Fields[fieldName]; exists {
+				rowVal.SetSchemaType(schemaType)
+			}
+		}
+
+		row[fieldName] = rowVal
+	}
+
+	return row, nil
+}
+
+// ScanRowsWithFields scans rows but only loads specified fields.
+// This is memory-efficient for query execution where you only need certain fields.
+// The callback receives row ID and a partial row with only the requested fields.
+func (t *Tree) ScanRowsWithFields(tablePath string, fields []string, callback func(rowID string, row models.Row) error) error {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	// Get table schema once
+	schema, _ := t.GetTableSchema(tablePath)
+
+	// Use ScanNodes to iterate through child nodes
+	return t.ScanNodes(tablePath, func(nodeInfo NodeInfo) error {
+		// Skip special metadata nodes
+		if t.isSpecialNode(nodeInfo.Name) {
+			return nil
+		}
+
+		// Build partial row with only requested fields
+		row := make(models.Row)
+
+		for _, fieldName := range fields {
+			// Check if field exists in node properties
+			if value, exists := nodeInfo.Props[fieldName]; exists {
+				rowVal := models.NewValue(value)
+
+				// Set schema type if available
+				if schema != nil {
+					if schemaType, exists := schema.Fields[fieldName]; exists {
+						rowVal.SetSchemaType(schemaType)
+					}
+				}
+
+				row[fieldName] = rowVal
+			} else {
+				// Field not present - set as null
+				row[fieldName] = models.NewValue(nil)
+			}
+		}
+
+		// Call the callback with row ID and partial row
+		return callback(nodeInfo.Name, row)
+	})
+}
+
+// ScanRowIDsOnly scans and returns only row IDs without loading any field data.
+// This is the most memory-efficient scan - useful for counting or initial filtering.
+func (t *Tree) ScanRowIDsOnly(tablePath string, callback func(rowID string) error) error {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return err
+	}
+
+	// Use ScanNodes but ignore all properties
+	return t.ScanNodes(tablePath, func(nodeInfo NodeInfo) error {
+		// Skip special metadata nodes
+		if t.isSpecialNode(nodeInfo.Name) {
+			return nil
+		}
+
+		// Call callback with just the row ID
+		return callback(nodeInfo.Name)
+	})
+}
+
+// GetRowIDsOnly returns all row IDs in a table without loading any data.
+// Memory-efficient alternative to ListRows when you only need IDs.
+func (t *Tree) GetRowIDsOnly(tablePath string) ([]string, error) {
+	// Validate table path
+	if err := t.ValidateTablePath(tablePath); err != nil {
+		return nil, err
+	}
+
+	var rowIDs []string
+	err := t.ScanRowIDsOnly(tablePath, func(rowID string) error {
+		rowIDs = append(rowIDs, rowID)
+		return nil
+	})
+
+	return rowIDs, err
+}
+
+// RowCursorBatch represents a batch of row cursors for efficient processing
+type RowCursorBatch struct {
+	Cursors   []*RowCursor
+	BatchSize int
+}
+
+// CreateRowCursorsWithFields creates lightweight cursors for a set of row IDs.
+// Only loads the specified fields, keeping memory footprint minimal.
+func (t *Tree) CreateRowCursorsWithFields(tablePath string, rowIDs []string, fields []string) ([]*RowCursor, error) {
+	cursors := make([]*RowCursor, 0, len(rowIDs))
+
+	for _, rowID := range rowIDs {
+		partialRow, err := t.GetRowFields(tablePath, rowID, fields)
+		if err != nil {
+			// Skip rows that can't be loaded
+			continue
+		}
+
+		cursors = append(cursors, &RowCursor{
+			RowID:  rowID,
+			Fields: partialRow,
+		})
+	}
+
+	return cursors, nil
+}
+
+// BatchRowCursors splits row cursors into batches for memory-efficient processing.
+// This allows processing large result sets without loading everything into memory.
+func BatchRowCursors(cursors []*RowCursor, batchSize int) []RowCursorBatch {
+	if batchSize <= 0 {
+		batchSize = 100 // Default batch size
+	}
+
+	var batches []RowCursorBatch
+
+	for i := 0; i < len(cursors); i += batchSize {
+		end := i + batchSize
+		if end > len(cursors) {
+			end = len(cursors)
+		}
+
+		batches = append(batches, RowCursorBatch{
+			Cursors:   cursors[i:end],
+			BatchSize: end - i,
+		})
+	}
+
+	return batches
+}
+
+// ============================================================================
+// Sorting Support for Cursors
+// ============================================================================
+
+// SortDirection represents the sort order
+type SortDirection int
+
+const (
+	SortAsc  SortDirection = 1
+	SortDesc SortDirection = -1
+)
+
+// SortField represents a field to sort by and its direction
+type SortField struct {
+	FieldName string
+	Direction SortDirection
+}
+
+// SortRowsByFields sorts a list of row IDs by specified fields.
+// This loads only the sort fields (memory efficient) and sorts in-place.
+// Use this before creating a QueryCursor for sorted results.
+func (t *Tree) SortRowsByFields(tablePath string, rowIDs []string, sortFields []SortField) ([]string, error) {
+	if len(sortFields) == 0 {
+		return rowIDs, nil // No sorting needed
+	}
+
+	// Extract field names for loading
+	fieldNames := make([]string, len(sortFields))
+	for i, sf := range sortFields {
+		fieldNames[i] = sf.FieldName
+	}
+
+	// Create a structure to hold row ID + sort field values
+	type sortableRow struct {
+		rowID  string
+		values models.Row
+	}
+
+	// Load sort fields for all rows
+	sortableRows := make([]sortableRow, 0, len(rowIDs))
+	for _, rowID := range rowIDs {
+		values, err := t.GetRowFields(tablePath, rowID, fieldNames)
+		if err != nil {
+			continue // Skip rows that can't be loaded
+		}
+
+		sortableRows = append(sortableRows, sortableRow{
+			rowID:  rowID,
+			values: values,
+		})
+	}
+
+	// Sort using custom comparison
+	for i := 0; i < len(sortableRows); i++ {
+		for j := i + 1; j < len(sortableRows); j++ {
+			shouldSwap := false
+
+			// Compare by each sort field in order
+			for _, sortField := range sortFields {
+				val1 := sortableRows[i].values[sortField.FieldName]
+				val2 := sortableRows[j].values[sortField.FieldName]
+
+				// Dereference pointers for comparison
+				cmp := compareValues(*val1, *val2)
+
+				if cmp == 0 {
+					continue // Equal, check next field
+				}
+
+				// Apply sort direction
+				if sortField.Direction == SortDesc {
+					cmp = -cmp
+				}
+
+				if cmp > 0 {
+					shouldSwap = true
+				}
+
+				break // Decision made, no need to check more fields
+			}
+
+			if shouldSwap {
+				sortableRows[i], sortableRows[j] = sortableRows[j], sortableRows[i]
+			}
+		}
+	}
+
+	// Extract sorted row IDs
+	sortedIDs := make([]string, len(sortableRows))
+	for i, sr := range sortableRows {
+		sortedIDs[i] = sr.rowID
+	}
+
+	return sortedIDs, nil
+}
+
+// compareValues compares two RowValue objects
+// Returns: -1 if v1 < v2, 0 if equal, 1 if v1 > v2
+func compareValues(v1, v2 models.RowValue) int {
+	// Handle null values
+	if v1.IsNull() && v2.IsNull() {
+		return 0
+	}
+	if v1.IsNull() {
+		return -1 // Nulls sort first
+	}
+	if v2.IsNull() {
+		return 1
+	}
+
+	// Compare as strings (basic comparison)
+	str1 := v1.AsString()
+	str2 := v2.AsString()
+
+	if str1 < str2 {
+		return -1
+	}
+	if str1 > str2 {
+		return 1
+	}
+	return 0
+}
+
+// NewSortedQueryCursor creates a cursor with pre-sorted row IDs.
+// This is more efficient than sorting after cursor creation.
+func (t *Tree) NewSortedQueryCursor(tablePath string, rowIDs []string, sortFields []SortField) (*QueryCursor, error) {
+	sortedIDs, err := t.SortRowsByFields(tablePath, rowIDs, sortFields)
+	if err != nil {
+		return nil, err
+	}
+
+	return t.NewQueryCursor(tablePath, sortedIDs), nil
 }
